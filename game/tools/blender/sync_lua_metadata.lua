@@ -64,6 +64,7 @@ elseif mode == "validate-provinces" then
     assert(type(prov.mesh_name) == "string" and #prov.mesh_name > 0, "Provincia sin mesh_name: " .. prov.id)
     assert(type(prov.country_id) == "string" and #prov.country_id == 2, "country_id inválido: " .. prov.id)
     assert(type(prov.name) == "string" and #prov.name > 0, "Provincia sin nombre: " .. prov.id)
+    assert(type(prov.terrain_type) == "string" and #prov.terrain_type > 0, "Provincia sin terrain_type: " .. prov.id)
     assert(not seen_mesh[prov.mesh_name], "mesh_name duplicado: " .. prov.mesh_name)
     seen_mesh[prov.mesh_name] = true
     by_country[prov.country_id] = (by_country[prov.country_id] or 0) + 1

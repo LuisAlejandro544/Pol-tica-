@@ -82,6 +82,12 @@ test('GitHub Action de Blender es estrictamente manual (solo workflow_dispatch) 
 
   const py = fs.readFileSync(path.resolve('game/tools/blender/build_latam_map.py'), 'utf8');
   assert.ok(py.includes('ne_10m_admin_1_states_provinces.geojson'), 'Debe usar GeoJSON Admin-1 de provincias');
+  assert.ok(py.includes('ne_10m_rivers_lake_centerlines.geojson'), 'Debe incluir ríos principales');
+  assert.ok(py.includes('srgb_channel_to_linear'), 'Debe convertir colores sRGB a Linear');
+  assert.ok(py.includes('BORDERS_INTERNATIONAL'), 'Debe generar fronteras internacionales');
+  assert.ok(py.includes('BORDERS_PROVINCIAL'), 'Debe generar bordes provinciales');
+  assert.ok(py.includes('MAT_OCEAN_BATHYMETRY'), 'Debe incluir batimetría oceánica');
+  assert.ok(py.includes('elevation_at_lon_lat'), 'Debe esculpir relieve andino continuo');
   assert.ok(py.includes('export_scene.gltf'), 'Debe exportar .glb desde Blender');
 
   const luaSync = fs.readFileSync(path.resolve('game/tools/blender/sync_lua_metadata.lua'), 'utf8');
