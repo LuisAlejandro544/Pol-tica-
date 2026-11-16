@@ -118,6 +118,7 @@ pub fn render_military_screen(
         .max(10.0);
 
     let mut next_selected_prov: Option<String> = None;
+    let mut selected_uid = state.selected_unit_id;
 
     egui::ScrollArea::vertical()
         .id_salt("military_screen_scroll")
@@ -366,7 +367,7 @@ pub fn render_military_screen(
                             .max_height(155.0)
                             .show(ui, |ui| {
                                 for unit in &player_units {
-                                    let is_sel = state.selected_unit_id == Some(unit.id);
+                                    let is_sel = selected_uid == Some(unit.id);
                                     let cur_name = graph
                                         .get(&unit.current_province)
                                         .map(|p| p.name.as_str())
@@ -419,7 +420,7 @@ pub fn render_military_screen(
                                                     )
                                                     .clicked()
                                                     {
-                                                        state.selected_unit_id = Some(unit.id);
+                                                        selected_uid = Some(unit.id);
                                                     }
                                                 },
                                             );
@@ -549,6 +550,7 @@ pub fn render_military_screen(
             });
         });
 
+    state.selected_unit_id = selected_uid;
     if let Some(prov) = next_selected_prov {
         state.selected_province_mesh = Some(prov);
     }

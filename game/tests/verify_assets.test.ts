@@ -364,6 +364,9 @@ test('Simulación en tiempo real, reclutamiento/movimiento de tropas por estados
   assert.ok(militaryRs.includes('OrderUnitMove'), 'military_screen.rs debe permitir ordenar marcha entre estados');
   assert.ok(companiesRs.startsWith('//! Propósito del archivo:'), 'companies_screen.rs debe tener encabezado explicativo');
   assert.ok(companiesRs.includes('draw_stock_sparkline'), 'companies_screen.rs debe dibujar gráfica de acciones');
+  assert.equal(uiModRs.includes('TurnCompleted'), false, 'ui/mod.rs no debe usar variante inexistente TurnCompleted');
+  assert.ok(uiModRs.includes('SimResponse::TickCompleted'), 'ui/mod.rs debe manejar SimResponse::TickCompleted');
+  assert.equal(engineRs.includes('state.get_relation(&unit.country_id'), false, 'step_unit_movements no debe prestar state entero mientras itera &mut state.units');
 });
 
 

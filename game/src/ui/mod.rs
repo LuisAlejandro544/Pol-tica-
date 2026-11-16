@@ -175,7 +175,7 @@ impl HorizonteLatamApp {
                             .set_province_graph(Arc::clone(&self.province_graph));
                     }
                 }
-                SimResponse::TurnCompleted(updated) => {
+                SimResponse::TickCompleted(updated) => {
                     let prev_selected = self.state.selected_country_id.clone();
                     let prev_prov = self.state.selected_province_mesh.clone();
                     let prev_unit = self.state.selected_unit_id;

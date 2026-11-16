@@ -493,7 +493,11 @@ fn step_unit_movements(state: &mut GameState, graph: &ProvinceGraph) {
     let mut arrivals: Vec<(String, String, String)> = Vec::new();
     let mut country_map_updates: Vec<(String, String)> = Vec::new();
 
-    for unit in &mut state.units {
+    let units = &mut state.units;
+    let relations = &state.relations;
+    let player_country_id = state.player_country_id.as_deref();
+
+    for unit in units {
         let Some(target_mesh) = unit.target_province.clone() else {
             if let Some(p) = graph.get(&unit.current_province) {
                 unit.world_pos = p.world_pos;
@@ -533,7 +537,15 @@ fn step_unit_movements(state: &mut GameState, graph: &ProvinceGraph) {
             unit.world_pos = to_pos;
             unit.march_progress = 0.0;
 
-            if dest_owner != unit.country_id && state.get_relation(&unit.country_id, &dest_owner).at_war {
+            let at_war = if dest_owner != unit.country_id {
+                relations
+                    .get(&GameState::ordered_pair(&unit.country_id, &dest_owner))
+                    .map(|r| r.at_war)
+                    .unwrap_or(false)
+            } else {
+                false
+            };
+            if at_war {
                 country_map_updates.push((unit.country_id.clone(), dest_name.clone()));
             }
 
@@ -541,7 +553,7 @@ fn step_unit_movements(state: &mut GameState, graph: &ProvinceGraph) {
                 unit.target_province = Some(unit.route_queue.remove(0));
             } else {
                 unit.target_province = None;
-                if state.player_country_id.as_deref() == Some(unit.country_id.as_str()) {
+                if player_country_id == Some(unit.country_id.as_str()) {
                     arrivals.push((unit.country_id.clone(), unit.name.clone(), dest_name));
                 }
             }
@@ -579,7 +591,7 @@ fn step_companies_and_stocks(
             * 0.0005
             * comp.rate_sensitivity;
         let stability_drift = (c.stability - 55.0) * 0.00018;
-        let noise = rng.random_range(-0.022..=0.022);
+        let noise = rng.random_range(-0.022_f64..=0.022_f64);
 
         let pct_change = (growth_drift - inflation_drag + rate_effect + stability_drift + noise)
             .clamp(-0.06, 0.06);
@@ -636,7 +648,7 @@ fn step_companies_and_stocks(
     }
 
     let total_w: f64 = weights.iter().map(|(_, w)| *w).sum();
-    let mut pick = rng.random_range(0.0..total_w);
+    let mut pick = rng.random_range(0.0_f64..total_w);
     let mut chosen_cid = weights[0].0.clone();
     for (cid, w) in weights {
         if pick <= w {
