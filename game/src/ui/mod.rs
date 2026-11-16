@@ -484,7 +484,7 @@ impl eframe::App for HorizonteLatamApp {
 
             if let Some(err) = self.last_error.clone() {
                 let err_resp = egui::Area::new(egui::Id::new("fullscreen_map_error_toast"))
-                    .anchor(egui::Align2::CENTER_TOP, [-16.0, 102.0])
+                    .anchor(egui::Align2::CENTER_TOP, [-16.0, 48.0])
                     .order(egui::Order::Foreground)
                     .show(ctx, |ui| {
                         crate::ui::theme::floating_hud_frame(false)

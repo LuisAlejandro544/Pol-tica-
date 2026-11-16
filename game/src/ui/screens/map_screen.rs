@@ -58,7 +58,7 @@ pub fn render_map_screen(
         MapCanvasConfig {
             fullscreen_borderless: true,
             show_mode_badge: false,
-            camera_bottom_offset: 60.0,
+            camera_bottom_offset: 48.0,
             camera_right_inset: (SAFE_RIGHT_PAD as f32) + 8.0,
         },
     );
@@ -95,128 +95,82 @@ pub fn render_map_screen(
     }
 
     let ctx = ui.ctx().clone();
+    let screen_h = ctx.screen_rect().height();
 
-    // 2. Barra flotante superior izquierda: Modos de Mapa + botón desplegable de Crónica + titular en vivo
-    let strip_max_w = (ctx.screen_rect().width() - 16.0 - (SAFE_RIGHT_PAD as f32)).max(300.0);
-    let strip_resp = egui::Area::new(egui::Id::new("map_modes_floating_strip"))
-        .anchor(egui::Align2::LEFT_TOP, [8.0, 62.0])
-        .order(egui::Order::Foreground)
+    // 2. Carril vertical compacto en el borde izquierdo: deja todo el centro y derecha libres
+    let rail_resp = egui::Area::new(egui::Id::new("map_modes_floating_rail"))
+        .anchor(egui::Align2::LEFT_TOP, [6.0, 48.0])
+        .order(egui::Order::Middle)
         .show(&ctx, |ui| {
-            ui.set_max_width(strip_max_w);
             let frame_resp = floating_hud_frame(true)
-                .inner_margin(Margin::symmetric(6, 4))
+                .inner_margin(Margin::symmetric(5, 5))
                 .show(ui, |ui| {
-                    ui.spacing_mut().scroll.bar_width = 3.0;
-                    egui::ScrollArea::horizontal()
-                        .id_salt("map_modes_strip_scroll")
-                        .auto_shrink([true, true])
-                        .show(ui, |ui| {
-                            ui.horizontal(|ui| {
-                                ui.spacing_mut().item_spacing.x = 4.0;
-                                for (mode, icon, title, accent) in [
-                                    (MapMode::Political, GameIcon::Crown, "Político", ACCENT_GOLD),
-                                    (
-                                        MapMode::GdpPerCapita,
-                                        GameIcon::Economy,
-                                        "PIB",
-                                        ACCENT_EMERALD,
-                                    ),
-                                    (
-                                        MapMode::Inflation,
-                                        GameIcon::Growth,
-                                        "Inflación",
-                                        ACCENT_CRIMSON,
-                                    ),
-                                    (
-                                        MapMode::Diplomacy,
-                                        GameIcon::Diplomacy,
-                                        "Diplomacia",
-                                        ACCENT_CYAN,
-                                    ),
-                                ] {
-                                    let active = *map_mode == mode;
-                                    if game_button(
-                                        ui,
-                                        Vec2::new(82.0, 26.0),
-                                        title,
-                                        Some(icon),
-                                        active,
-                                        Some(accent),
-                                    )
-                                    .clicked()
-                                    {
-                                        *map_mode = mode;
-                                    }
-                                }
+                    ui.with_layout(Layout::top_down(Align::Min), |ui| {
+                        ui.spacing_mut().item_spacing.y = 4.0;
+                        for (mode, icon, title, accent) in [
+                            (MapMode::Political, GameIcon::Crown, "Político", ACCENT_GOLD),
+                            (MapMode::GdpPerCapita, GameIcon::Economy, "PIB", ACCENT_EMERALD),
+                            (MapMode::Inflation, GameIcon::Growth, "Inflac.", ACCENT_CRIMSON),
+                            (MapMode::Diplomacy, GameIcon::Diplomacy, "Diplo.", ACCENT_CYAN),
+                        ] {
+                            let active = *map_mode == mode;
+                            if game_button(
+                                ui,
+                                Vec2::new(78.0, 24.0),
+                                title,
+                                Some(icon),
+                                active,
+                                Some(accent),
+                            )
+                            .clicked()
+                            {
+                                *map_mode = mode;
+                            }
+                        }
 
-                                ui.separator();
-
-                                let chron_lbl = if viewport.show_chronicle_drawer {
-                                    "Ocultar"
-                                } else {
-                                    "Crónica"
-                                };
-                                if game_button(
-                                    ui,
-                                    Vec2::new(78.0, 26.0),
-                                    chron_lbl,
-                                    Some(GameIcon::Dispatch),
-                                    viewport.show_chronicle_drawer,
-                                    Some(ACCENT_CYAN),
-                                )
-                                .clicked()
-                                {
-                                    viewport.show_chronicle_drawer =
-                                        !viewport.show_chronicle_drawer;
-                                }
-
-                                if !viewport.show_chronicle_drawer {
-                                    if let Some(latest) = state.chronicle.first() {
-                                        let preview: String =
-                                            latest.summary.chars().take(42).collect();
-                                        let suffix = if latest.summary.chars().count() > 42 {
-                                            "..."
-                                        } else {
-                                            ""
-                                        };
-                                        ui.add_space(2.0);
-                                        ui.label(
-                                            RichText::new(format!(
-                                                "[{}] {}{}",
-                                                latest.country_id, preview, suffix
-                                            ))
-                                            .size(10.5)
-                                            .color(TEXT_MUTED),
-                                        );
-                                    }
-                                }
-                            });
-                        });
+                        ui.add_space(1.0);
+                        let chron_lbl = if viewport.show_chronicle_drawer {
+                            "Cerrar"
+                        } else {
+                            "Crónica"
+                        };
+                        if game_button(
+                            ui,
+                            Vec2::new(78.0, 24.0),
+                            chron_lbl,
+                            Some(GameIcon::Dispatch),
+                            viewport.show_chronicle_drawer,
+                            Some(ACCENT_CYAN),
+                        )
+                        .clicked()
+                        {
+                            viewport.show_chronicle_drawer = !viewport.show_chronicle_drawer;
+                        }
+                    });
                 });
             draw_corner_rivets(ui.painter(), frame_resp.response.rect, BORDER_BRASS);
         });
-    result.overlay_rects.push(strip_resp.response.rect);
+    result.overlay_rects.push(rail_resp.response.rect);
 
-    // 3. Cajón desplegable flotante de Crónica Regional (solo visible cuando el jugador lo abre)
+    // 3. Cajón desplegable flotante de Crónica Regional junto al carril izquierdo
     if viewport.show_chronicle_drawer {
+        let chron_max_h = (screen_h - 140.0).clamp(115.0, 210.0);
         let chron_resp = egui::Area::new(egui::Id::new("map_chronicle_floating_drawer"))
-            .anchor(egui::Align2::LEFT_TOP, [8.0, 102.0])
-            .order(egui::Order::Foreground)
+            .anchor(egui::Align2::LEFT_TOP, [100.0, 48.0])
+            .order(egui::Order::Middle)
             .show(&ctx, |ui| {
-                ui.set_width(272.0);
+                ui.set_width(256.0);
                 let frame_resp = floating_hud_frame(true).inner_margin(8.0).show(ui, |ui| {
                     ui.with_layout(Layout::top_down(Align::Min), |ui| {
-                        ui.horizontal(|ui| {
-                            draw_section_header(
-                                ui,
-                                GameIcon::Dispatch,
-                                "CRÓNICA REGIONAL",
-                                ACCENT_CYAN,
-                            );
-                        });
+                        draw_section_header(
+                            ui,
+                            GameIcon::Dispatch,
+                            "CRÓNICA REGIONAL",
+                            ACCENT_CYAN,
+                        );
                         egui::ScrollArea::vertical()
                             .id_salt("map_chronicle_scroll")
-                            .max_height(210.0)
+                            .max_height(chron_max_h)
                             .auto_shrink([false, false])
                             .show(ui, |ui| {
                                 for entry in &state.chronicle {
@@ -249,27 +203,27 @@ pub fn render_map_screen(
         result.overlay_rects.push(chron_resp.response.rect);
     }
 
-    // 4. Tarjeta flotante inferior izquierda para unidad militar seleccionada
+    // 4. Tarjeta flotante inferior izquierda (a la derecha del carril) para unidad militar seleccionada
     if let Some(uid) = state.selected_unit_id {
         if let Some(unit) = state.units.iter().find(|u| u.id == uid).cloned() {
             let is_mine = state.player_country_id.as_deref() == Some(unit.country_id.as_str());
             let unit_resp = egui::Area::new(egui::Id::new("map_selected_unit_floating"))
-                .anchor(egui::Align2::LEFT_BOTTOM, [8.0, -58.0])
-                .order(egui::Order::Foreground)
+                .anchor(egui::Align2::LEFT_BOTTOM, [100.0, -48.0])
+                .order(egui::Order::Middle)
                 .show(&ctx, |ui| {
-                    ui.set_width(248.0);
-                    let frame_resp = floating_hud_frame(true).inner_margin(8.0).show(ui, |ui| {
+                    ui.set_width(238.0);
+                    let frame_resp = floating_hud_frame(true).inner_margin(7.0).show(ui, |ui| {
                         ui.horizontal(|ui| {
                             ui.label(
                                 RichText::new(format!("{} ({})", unit.name, unit.troops))
                                     .strong()
-                                    .size(12.0)
+                                    .size(11.5)
                                     .color(ACCENT_GOLD),
                             );
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                 if game_button(
                                     ui,
-                                    Vec2::new(24.0, 20.0),
+                                    Vec2::new(22.0, 19.0),
                                     "X",
                                     None,
                                     false,
@@ -294,29 +248,29 @@ pub fn render_map_screen(
                                 .unwrap_or(tgt);
                             ui.label(
                                 RichText::new(format!("Marcha -> {tgt_name}"))
-                                    .size(11.0)
+                                    .size(10.5)
                                     .color(TEXT_PRIMARY),
                             );
                             draw_gauge_bar(
                                 ui,
                                 ui.available_width(),
-                                12.0,
+                                11.0,
                                 unit.march_progress,
                                 ACCENT_CYAN,
                                 &format!("{:.0}%", unit.march_progress * 100.0),
                             );
                         } else {
                             ui.label(
-                                RichText::new(format!("Estacionada en {cur_name}"))
-                                    .size(11.0)
+                                RichText::new(format!("En {cur_name}"))
+                                    .size(10.5)
                                     .color(TEXT_PRIMARY),
                             );
                         }
 
                         if is_mine {
                             ui.label(
-                                RichText::new("Toca un estado en el mapa para mover")
-                                    .size(10.0)
+                                RichText::new("Toca un estado para mover")
+                                    .size(9.5)
                                     .color(ACCENT_CYAN),
                             );
                         }
@@ -327,23 +281,25 @@ pub fn render_map_screen(
         }
     }
 
-    // 5. Popup emergente de despacho diplomático al tocar un país/provincia en el mapa
+    // 5. Popup emergente de país/provincia: en Order::Foreground, compacto y libre de HUDs/cámara
     if *show_country_popup {
         if let Some(sel_id) = state.selected_country_id.clone() {
             if let Some(country) = state.countries.get(&sel_id).cloned() {
                 let is_player = state.player_country_id.as_deref() == Some(sel_id.as_str());
+                let popup_scroll_h = (screen_h - 165.0).clamp(130.0, 215.0);
                 let mut open = true;
                 let win_resp = egui::Window::new(
                     RichText::new(format!("{} [{}]", country.name.to_uppercase(), country.id))
                         .strong()
                         .color(ACCENT_GOLD),
                 )
+                .order(egui::Order::Foreground)
                 .open(&mut open)
                 .collapsible(false)
                 .resizable(false)
-                .anchor(egui::Align2::RIGHT_CENTER, [-((SAFE_RIGHT_PAD as f32) + 8.0), 0.0])
-                .default_width(295.0)
-                .max_width(305.0)
+                .anchor(egui::Align2::RIGHT_TOP, [-((SAFE_RIGHT_PAD as f32) + 8.0), 48.0])
+                .default_width(282.0)
+                .max_width(290.0)
                 .frame(
                     egui::Frame::window(&ctx.style())
                         .fill(BG_PANEL)
@@ -353,20 +309,20 @@ pub fn render_map_screen(
                 .show(&ctx, |ui| {
                     egui::ScrollArea::vertical()
                         .id_salt("map_country_popup_scroll")
-                        .max_height(255.0)
+                        .max_height(popup_scroll_h)
                         .show(ui, |ui| {
                             ui.horizontal(|ui| {
-                                draw_country_shield(ui, Vec2::new(36.0, 30.0), &country);
+                                draw_country_shield(ui, Vec2::new(34.0, 27.0), &country);
                                 ui.vertical(|ui| {
                                     ui.spacing_mut().item_spacing.y = 0.0;
                                     ui.label(
                                         RichText::new(format!("Capital: {}", country.capital))
-                                            .size(12.0)
+                                            .size(11.5)
                                             .color(TEXT_PRIMARY),
                                     );
                                     ui.label(
                                         RichText::new(&country.region)
-                                            .size(11.0)
+                                            .size(10.5)
                                             .color(TEXT_MUTED),
                                     );
                                 });
@@ -382,7 +338,7 @@ pub fn render_map_screen(
                                             .map(|u| u.troops)
                                             .sum();
                                         ui.add_space(4.0);
-                                        card_frame(Some(ACCENT_CYAN)).inner_margin(6.0).show(
+                                        card_frame(Some(ACCENT_CYAN)).inner_margin(5.0).show(
                                             ui,
                                             |ui| {
                                                 ui.label(
@@ -391,7 +347,7 @@ pub fn render_map_screen(
                                                         prov.name, prov.id
                                                     ))
                                                     .strong()
-                                                    .size(12.0)
+                                                    .size(11.5)
                                                     .color(ACCENT_CYAN),
                                                 );
                                                 ui.label(
@@ -401,7 +357,7 @@ pub fn render_map_screen(
                                                         prov.terrain_type,
                                                         stationed
                                                     ))
-                                                    .size(11.0)
+                                                    .size(10.5)
                                                     .color(TEXT_MUTED),
                                                 );
                                             },
@@ -411,38 +367,74 @@ pub fn render_map_screen(
                             }
 
                             ui.add_space(4.0);
-                            well_frame().show(ui, |ui| {
-                                ui.label(format!(
-                                    "Población: {}",
-                                    format_population(country.population)
-                                ));
-                                ui.label(format!(
-                                    "Moneda: {} ({:.2}/USD)",
-                                    country.economy.currency_code, country.economy.exchange_rate_usd
-                                ));
-                                ui.label(
-                                    RichText::new(format!(
-                                        "PIB: {} ({:+.1}%)",
-                                        format_usd_millions(country.economy.gdp_usd_millions),
-                                        country.economy.gdp_growth_pct
-                                    ))
-                                    .color(ACCENT_EMERALD),
-                                );
-                                ui.label(format!("Inflación: {:.1}%", country.economy.inflation_pct));
-                                ui.label(format!(
-                                    "Desempleo: {:.1}%",
-                                    country.economy.unemployment_pct
-                                ));
+                            well_frame().inner_margin(Margin::symmetric(6, 4)).show(ui, |ui| {
+                                egui::Grid::new("country_popup_stats_grid")
+                                    .num_columns(2)
+                                    .spacing([12.0, 3.0])
+                                    .show(ui, |ui| {
+                                        ui.label(
+                                            RichText::new(format!(
+                                                "Pob: {}",
+                                                format_population(country.population)
+                                            ))
+                                            .size(11.0),
+                                        );
+                                        ui.label(
+                                            RichText::new(format!(
+                                                "{}: {:.2}/USD",
+                                                country.economy.currency_code,
+                                                country.economy.exchange_rate_usd
+                                            ))
+                                            .size(11.0),
+                                        );
+                                        ui.end_row();
+
+                                        ui.label(
+                                            RichText::new(format!(
+                                                "PIB: {} ({:+.1}%)",
+                                                format_usd_millions(country.economy.gdp_usd_millions),
+                                                country.economy.gdp_growth_pct
+                                            ))
+                                            .size(11.0)
+                                            .color(ACCENT_EMERALD),
+                                        );
+                                        ui.label(
+                                            RichText::new(format!(
+                                                "Inflac: {:.1}%",
+                                                country.economy.inflation_pct
+                                            ))
+                                            .size(11.0),
+                                        );
+                                        ui.end_row();
+
+                                        ui.label(
+                                            RichText::new(format!(
+                                                "Desemp: {:.1}%",
+                                                country.economy.unemployment_pct
+                                            ))
+                                            .size(11.0),
+                                        );
+                                        ui.label(
+                                            RichText::new(format!(
+                                                "Tropas: {}",
+                                                country.military.active_troops
+                                            ))
+                                            .size(11.0),
+                                        );
+                                        ui.end_row();
+                                    });
+
                                 if let Some(ruling) = country.ruling_party() {
-                                    ui.label(format!(
-                                        "Gobierno: {} ({})",
-                                        ruling.acronym, ruling.ideology
-                                    ));
+                                    ui.add_space(2.0);
+                                    ui.label(
+                                        RichText::new(format!(
+                                            "Gobierno: {} ({})",
+                                            ruling.acronym, ruling.ideology
+                                        ))
+                                        .size(10.5)
+                                        .color(TEXT_MUTED),
+                                    );
                                 }
-                                ui.label(format!(
-                                    "Fuerzas Activas: {} efectivos",
-                                    country.military.active_troops
-                                ));
                             });
 
                             if !is_player {
@@ -455,6 +447,7 @@ pub fn render_map_screen(
                                             rel.opinion
                                         ))
                                         .strong()
+                                        .size(11.5)
                                         .color(if rel.opinion >= 0.0 {
                                             ACCENT_EMERALD
                                         } else {
@@ -464,7 +457,7 @@ pub fn render_map_screen(
                                     ui.add_space(4.0);
                                     if game_button(
                                         ui,
-                                        Vec2::new(ui.available_width(), 36.0),
+                                        Vec2::new(ui.available_width(), 32.0),
                                         "ABRIR EMBAJADA >",
                                         Some(GameIcon::Diplomacy),
                                         true,

@@ -380,9 +380,13 @@ test('Mapa 3D a pantalla completa con HUD flotante translúcido y fichas militar
   assert.ok(themeRs.includes('floating_dock_frame'), 'theme.rs debe definir floating_dock_frame');
   assert.ok(chromeRs.includes('render_floating_top_hud'), 'chrome.rs debe exponer HUD superior flotante');
   assert.ok(chromeRs.includes('render_floating_bottom_nav'), 'chrome.rs debe exponer dock inferior flotante');
+  assert.ok(chromeRs.includes('Order::Tooltip'), 'render_event_popup debe dibujarse en Order::Tooltip sobre las barras HUD');
+  assert.ok(chromeRs.includes('event_popup_scrim'), 'render_event_popup debe incluir telón bloqueante');
   assert.ok(uiModRs.includes('Margin::ZERO'), 'ui/mod.rs debe usar Margin::ZERO en WorldMap para mapa 3D borde a borde');
   assert.ok(uiModRs.includes('hud_rects'), 'ui/mod.rs debe registrar los rectángulos del HUD flotante');
   assert.ok(mapScreenRs.includes('fullscreen_borderless: true'), 'map_screen.rs debe renderizar el mapa 3D sin bordes');
+  assert.ok(mapScreenRs.includes('map_modes_floating_rail'), 'map_screen.rs debe usar carril vertical compacto a la izquierda');
+  assert.ok(mapScreenRs.includes('country_popup_stats_grid'), 'map_screen.rs debe usar grilla compacta en 2 columnas');
   assert.ok(mapScreenRs.includes('show_chronicle_drawer'), 'map_screen.rs debe permitir plegar/desplegar la crónica');
   assert.ok(mapCanvasRs.includes('placed_badges'), 'map_canvas.rs debe evitar el solapamiento entre fichas de ejército');
   assert.ok(mapCanvasRs.includes('pointer_on_hud'), 'map_canvas.rs debe ignorar toques que caigan sobre HUD flotante');

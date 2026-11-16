@@ -282,29 +282,46 @@ pub fn render_latam_map(
             }
 
             let badge_size = if is_selected {
-                Vec2::new(50.0, 20.0)
+                Vec2::new(46.0, 18.0)
             } else {
-                Vec2::new(42.0, 17.5)
+                Vec2::new(37.0, 15.5)
             };
 
             let offsets = [
                 Vec2::ZERO,
-                Vec2::new(0.0, -20.0),
-                Vec2::new(0.0, 20.0),
-                Vec2::new(45.0, 0.0),
-                Vec2::new(-45.0, 0.0),
-                Vec2::new(45.0, -20.0),
-                Vec2::new(-45.0, 20.0),
-                Vec2::new(0.0, -40.0),
-                Vec2::new(0.0, 40.0),
+                Vec2::new(0.0, -19.0),
+                Vec2::new(0.0, 19.0),
+                Vec2::new(41.0, 0.0),
+                Vec2::new(-41.0, 0.0),
+                Vec2::new(41.0, -19.0),
+                Vec2::new(-41.0, 19.0),
+                Vec2::new(-41.0, -19.0),
+                Vec2::new(41.0, 19.0),
+                Vec2::new(0.0, -38.0),
+                Vec2::new(0.0, 38.0),
+                Vec2::new(82.0, 0.0),
+                Vec2::new(-82.0, 0.0),
+                Vec2::new(41.0, -38.0),
+                Vec2::new(-41.0, -38.0),
+                Vec2::new(41.0, 38.0),
+                Vec2::new(-41.0, 38.0),
             ];
             let mut badge_rect = Rect::from_center_size(anchor_pos, badge_size);
+            let mut found_slot = false;
             for off in offsets {
                 let candidate = Rect::from_center_size(anchor_pos + off, badge_size);
-                if !placed_badges.iter().any(|r| r.intersects(candidate)) {
+                if !placed_badges.iter().any(|r| r.expand(2.5).intersects(candidate)) {
                     badge_rect = candidate;
+                    found_slot = true;
                     break;
                 }
+            }
+            if !found_slot {
+                let ring = (placed_badges.len() as f32) * 0.85;
+                badge_rect = Rect::from_center_size(
+                    anchor_pos + Vec2::new(ring.cos() * 44.0, ring.sin() * 24.0),
+                    badge_size,
+                );
             }
             placed_badges.push(badge_rect);
 
@@ -352,7 +369,7 @@ pub fn render_latam_map(
             // Franja lateral de color nacional
             let stripe = Rect::from_min_size(
                 badge_rect.min + Vec2::new(1.5, 1.5),
-                Vec2::new(4.5, badge_rect.height() - 3.0),
+                Vec2::new(4.0, badge_rect.height() - 3.0),
             );
             map_painter.rect_filled(stripe, CornerRadius::same(1), c_rgb);
 
@@ -363,10 +380,10 @@ pub fn render_latam_map(
                 format!("{:.1}K", troops_k)
             };
             map_painter.text(
-                badge_rect.center() + Vec2::new(3.0, 0.0),
+                badge_rect.center() + Vec2::new(2.5, 0.0),
                 egui::Align2::CENTER_CENTER,
                 lbl,
-                FontId::proportional(if is_selected { 11.0 } else { 10.0 }),
+                FontId::proportional(if is_selected { 10.5 } else { 9.5 }),
                 if is_selected { TEXT_DARK } else { TEXT_PRIMARY },
             );
 
@@ -408,35 +425,35 @@ pub fn render_latam_map(
     }
 
     // Consola táctil flotante de cámara (botón físico estilo HOI4) en la esquina inferior derecha
-    let dock_w = (rect.width() - 20.0).clamp(220.0, 294.0);
+    let dock_w = (rect.width() - 20.0).clamp(210.0, 248.0);
     let btn_rect = Rect::from_min_size(
         rect.right_bottom()
             - Vec2::new(
                 dock_w + config.camera_right_inset,
-                36.0 + config.camera_bottom_offset,
+                31.0 + config.camera_bottom_offset,
             ),
-        Vec2::new(dock_w, 36.0),
+        Vec2::new(dock_w, 31.0),
     );
     let mut ui_child = ui.new_child(egui::UiBuilder::new().max_rect(btn_rect));
     let mut cam_btn_clicked = false;
     let cam_frame = floating_hud_frame(true)
-        .inner_margin(Margin::symmetric(6, 3))
+        .inner_margin(Margin::symmetric(5, 2))
         .show(&mut ui_child, |ui| {
             ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 5.0;
-                if step_button(ui, Vec2::new(28.0, 28.0), "", Some(GameIcon::Plus)).clicked() {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                if step_button(ui, Vec2::new(24.0, 24.0), "", Some(GameIcon::Plus)).clicked() {
                     viewport.camera_3d.zoom_by_factor(1.24);
                     cam_btn_clicked = true;
                 }
-                if step_button(ui, Vec2::new(28.0, 28.0), "", Some(GameIcon::Minus)).clicked() {
+                if step_button(ui, Vec2::new(24.0, 24.0), "", Some(GameIcon::Minus)).clicked() {
                     viewport.camera_3d.zoom_by_factor(1.0 / 1.24);
                     cam_btn_clicked = true;
                 }
-                if step_button(ui, Vec2::new(28.0, 28.0), "", Some(GameIcon::RotateLeft)).clicked() {
+                if step_button(ui, Vec2::new(24.0, 24.0), "", Some(GameIcon::RotateLeft)).clicked() {
                     viewport.camera_3d.yaw = (viewport.camera_3d.yaw - 0.18).clamp(-1.35, 1.35);
                     cam_btn_clicked = true;
                 }
-                if step_button(ui, Vec2::new(28.0, 28.0), "", Some(GameIcon::RotateRight)).clicked() {
+                if step_button(ui, Vec2::new(24.0, 24.0), "", Some(GameIcon::RotateRight)).clicked() {
                     viewport.camera_3d.yaw = (viewport.camera_3d.yaw + 0.18).clamp(-1.35, 1.35);
                     cam_btn_clicked = true;
                 }
@@ -445,7 +462,7 @@ pub fn render_latam_map(
                 } else {
                     "2D"
                 };
-                if step_button(ui, Vec2::new(52.0, 28.0), angle_lbl, Some(GameIcon::Camera3D)).clicked() {
+                if step_button(ui, Vec2::new(44.0, 24.0), angle_lbl, Some(GameIcon::Camera3D)).clicked() {
                     if viewport.camera_3d.is_top_down() {
                         viewport.camera_3d.set_tactical_3d();
                     } else {
@@ -453,7 +470,7 @@ pub fn render_latam_map(
                     }
                     cam_btn_clicked = true;
                 }
-                if step_button(ui, Vec2::new(72.0, 28.0), "Centro", Some(GameIcon::Center)).clicked() {
+                if step_button(ui, Vec2::new(62.0, 24.0), "Centro", Some(GameIcon::Center)).clicked() {
                     viewport.camera_3d.reset();
                     cam_btn_clicked = true;
                 }
