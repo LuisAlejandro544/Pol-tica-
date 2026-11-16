@@ -40,7 +40,7 @@ npx --yes tsx --test game/tests/verify_assets.test.ts
 ```bash
 cd game
 cargo check
-cargo ndk -t arm64-v8a -t armeabi-v7a -p 24 -o android/app/src/main/jniLibs build --release
+cargo ndk -t arm64-v8a -t armeabi-v7a --platform 24 -o android/app/src/main/jniLibs build --release
 ```
 
 ### Compilar APK vía Gradle

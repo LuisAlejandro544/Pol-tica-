@@ -42,7 +42,7 @@ val buildRustAndroid by tasks.registering(Exec::class) {
         cmd.add("-t")
         cmd.add(abi)
     }
-    cmd.addAll(listOf("-p", "24", "-o", jniLibsDir.absolutePath, "build"))
+    cmd.addAll(listOf("--platform", "24", "-o", jniLibsDir.absolutePath, "build"))
     if (requestedProfile == "release") {
         cmd.add("--release")
     }

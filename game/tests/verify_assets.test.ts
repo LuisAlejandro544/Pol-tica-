@@ -79,6 +79,11 @@ test('Configuración Android soporta 32-bit, 64-bit, horizontal, cero Kotlin y s
   assert.ok(gradle.includes('arm64-v8a'), 'Falta ABI 64-bit arm64-v8a');
   assert.ok(gradle.includes('rustAbi'), 'build.gradle.kts debe soportar filtro -PrustAbi');
   assert.ok(gradle.includes('cargo'), 'Gradle debe ejecutar cargo-ndk');
+  assert.ok(
+    gradle.includes('"--platform"') || gradle.includes('"-P"'),
+    'build.gradle.kts debe usar --platform o -P (en cargo-ndk 4.x -p significa --package)',
+  );
+  assert.equal(gradle.includes('"-p", "24"'), false, 'No usar -p 24 con cargo-ndk 4.x');
   assert.ok(manifest.includes('android:screenOrientation="sensorLandscape"'), 'Debe forzar formato horizontal');
   assert.ok(manifest.includes('android:hasCode="false"'), 'NativeActivity puro sin Kotlin');
 });
