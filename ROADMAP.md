@@ -31,6 +31,8 @@ Este documento describe la evolución planificada del proyecto desde el prototip
 - [x] Implementar macroeconomía realista (Regla de Taylor, Curva de Phillips, pass-through cambiario, prima de riesgo y ciclo global), coaliciones parlamentarias sobre la mesa circular del Congreso, eventos por causas reales y ciclo empresarial bidireccional (exportaciones, impuestos, recortes y quiebras).
 - [x] Implementar **Ministro de Relaciones Exteriores** asignable mediante popup dedicado, con estadísticas aleatorias (mejora de relaciones y probabilidades de Acuerdo de Paz, Paz Blanca, Alianza y Pacto de No Agresión) y ejecución instantánea de misiones en **0 días**.
 - [x] Implementar **presupuesto militar real para la IA** (`ai_military_budget_m`), tope de tropas objetivo (paz vs. guerra), límite fiscal de mantenimiento, enfriamiento de reclutamiento y refuerzo de divisiones existentes sin spam.
+- [x] Exponer **ingresos fiscales brutos y desglose mensual de gastos** en `Economía` y `TESORERÍA`, recalibrar servicio de deuda/eventos y sincronizar ajustes económicos, militares y políticos vía `PlayerAction`.
+- [x] Incorporar **población y desempleo por región (`RegionState`)** con cifras exactas y porcentajes, reclutamiento libre de tropas desde los desempleados regionales y cupo proporcional a población/desempleados tanto para el jugador como para la IA enemiga.
 - [ ] Expandir el modelo de datos en Rust/Lua para gestionar infraestructura e impuestos específicos a nivel de **provincia**.
 - [ ] Evaluar migración de arquitectura principal exclusiva a **64 bits (`arm64-v8a`)** conforme crezca la complejidad de mallas 3D y memoria.
 

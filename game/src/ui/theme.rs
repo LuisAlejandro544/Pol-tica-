@@ -632,6 +632,18 @@ pub fn paint_icon(p: &egui::Painter, rect: Rect, icon: GameIcon, color: Color32)
     }
 }
 
+pub fn format_exact_count(val: u64) -> String {
+    let s = val.to_string();
+    let mut out = String::with_capacity(s.len() + s.len() / 3);
+    for (idx, ch) in s.chars().rev().enumerate() {
+        if idx > 0 && idx % 3 == 0 {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out.chars().rev().collect()
+}
+
 pub fn format_population(pop: u64) -> String {
     if pop >= 1_000_000 {
         format!("{:.2} M", (pop as f64) / 1_000_000.0)

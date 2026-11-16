@@ -118,12 +118,24 @@ fn render_top_hud_inner(
                                         &format_population(c.population),
                                         TEXT_PRIMARY,
                                     );
+                                    let treasury_lbl = format!(
+                                        "{} ({:+.1}M/m)",
+                                        format_usd_millions(c.economy.treasury_usd_millions),
+                                        c.economy.last_monthly_balance
+                                    );
+                                    let treasury_col = if c.economy.last_monthly_balance >= 0.0 {
+                                        ACCENT_EMERALD
+                                    } else if c.economy.treasury_usd_millions > 0.0 {
+                                        ACCENT_GOLD
+                                    } else {
+                                        ACCENT_CRIMSON
+                                    };
                                     stat_slot(
                                         ui,
                                         GameIcon::Treasury,
                                         "TESORERÍA",
-                                        &format_usd_millions(c.economy.treasury_usd_millions),
-                                        ACCENT_EMERALD,
+                                        &treasury_lbl,
+                                        treasury_col,
                                     );
                                     stat_slot(
                                         ui,

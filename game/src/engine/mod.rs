@@ -12,7 +12,8 @@ use crate::lua_bridge::{LuaEngine, LuaEventContext, LuaStepContext};
 use crate::models::{
     ArchivedStockSample, ArmyUnit, CampaignThumbnail, CompanyCategory, CompanyCategoryTemplate,
     CompanyEntity, Difficulty, ForeignMinister, GameState, GlobalMacroCycle, MacroHistorySnapshot,
-    MinisterMissionKind, PlayerAction, ProvinceGraph, ProvinceNode,
+    MinisterMissionKind, PlayerAction, PoliticalDecreeKind, ProvinceGraph, ProvinceNode,
+    RegionState,
 };
 use crossbeam_channel::{Receiver, Sender};
 use leaders::{
@@ -109,7 +110,7 @@ impl SimulationWorker {
                             graph = new_graph;
                         }
                         SimCommand::NewCampaign { difficulty } => {
-                            match build_initial_state(&lua_engine, difficulty) {
+                            match build_initial_state(&lua_engine, &graph, difficulty) {
                                 Ok(state) => {
                                     let _ = res_tx.send(SimResponse::CampaignReady(Box::new(state)));
                                 }
@@ -289,7 +290,64 @@ pub fn compute_minister_mission_chance_pct(
     }
 }
 
-/// Aplica una acción del jugador sobre el `GameState` (militar o diplomática instantánea sin consumir días).
+/// Recluta tropas directamente desde la población desempleada de una región propia,
+/// respetando su tope demográfico regional y la tesorería nacional.
+pub fn recruit_from_region(
+    state: &mut GameState,
+    graph: &ProvinceGraph,
+    country_id: &str,
+    province_mesh: &str,
+    requested_troops: u64,
+) -> Option<(u64, f64, f64, String)> {
+    if requested_troops == 0 {
+        return None;
+    }
+
+    let reg_cap = state
+        .regions
+        .get(province_mesh)
+        .filter(|r| r.country_id == country_id)
+        .map(|r| r.max_recruitable())
+        .unwrap_or(0);
+
+    let treasury = state
+        .countries
+        .get(country_id)
+        .map(|c| c.economy.treasury_usd_millions)
+        .unwrap_or(0.0);
+    let max_affordable = ((treasury / 70.0) * 1_000.0).floor() as u64;
+    let actual_troops = requested_troops.min(reg_cap).min(max_affordable);
+    if actual_troops == 0 {
+        return None;
+    }
+
+    let actual_cost_m = (actual_troops as f64 / 1_000.0) * 70.0;
+    let added_upkeep = (actual_troops as f64 / 1_000.0) * 1.35;
+
+    let prov_name = if let Some(region) = state.regions.get_mut(province_mesh) {
+        region.unemployed = region.unemployed.saturating_sub(actual_troops);
+        region.stationed_recruited = region.stationed_recruited.saturating_add(actual_troops);
+        region.name.clone()
+    } else {
+        graph
+            .get(province_mesh)
+            .map(|p| p.name.clone())
+            .unwrap_or_else(|| province_mesh.to_string())
+    };
+
+    if let Some(c) = state.countries.get_mut(country_id) {
+        c.economy.treasury_usd_millions = (c.economy.treasury_usd_millions - actual_cost_m).max(0.0);
+        c.military.active_troops += actual_troops;
+        let workforce = ((c.population as f64) * 0.48).max(1.0);
+        let unemp_drop = ((actual_troops as f64) / workforce) * 100.0;
+        c.economy.unemployment_pct = (c.economy.unemployment_pct - unemp_drop).clamp(0.5, 34.0);
+        c.recompute_fiscal_snapshot();
+    }
+
+    Some((actual_troops, actual_cost_m, added_upkeep, prov_name))
+}
+
+/// Aplica una acción del jugador sobre el `GameState` (militar, fiscal, política o diplomática instantánea).
 pub fn apply_player_action(
     state: &mut GameState,
     graph: &ProvinceGraph,
@@ -300,30 +358,18 @@ pub fn apply_player_action(
             country_id,
             province_mesh,
             troops,
-            cost_m,
+            cost_m: _,
         } => {
-            let can_pay = state
-                .countries
-                .get(country_id)
-                .map(|c| c.economy.treasury_usd_millions >= *cost_m)
-                .unwrap_or(false);
-            if !can_pay || *troops == 0 {
+            let Some((actual_troops, actual_cost_m, added_upkeep, prov_name)) =
+                recruit_from_region(state, graph, country_id, province_mesh, *troops)
+            else {
                 return;
-            }
+            };
 
-            let added_upkeep = (*troops as f64 / 1_000.0) * 1.35;
-            if let Some(c) = state.countries.get_mut(country_id) {
-                c.economy.treasury_usd_millions -= *cost_m;
-                c.military.active_troops += *troops;
-                c.economy.troop_upkeep_usd_millions = c.estimated_troop_upkeep_m();
-                // Descuenta inmediatamente del ingreso mensual neto proyectado
-                c.economy.last_monthly_balance -= added_upkeep;
-            }
-
-            let (world_pos, prov_name) = graph
+            let world_pos = graph
                 .get(province_mesh)
-                .map(|p| (p.world_pos, p.name.clone()))
-                .unwrap_or(([0.0, 0.5, 0.0], province_mesh.clone()));
+                .map(|p| p.world_pos)
+                .unwrap_or([0.0, 0.5, 0.0]);
 
             let uid = state.next_unit_id;
             state.next_unit_id += 1;
@@ -331,7 +377,7 @@ pub fn apply_player_action(
                 id: uid,
                 name: format!("Regimiento #{uid}"),
                 country_id: country_id.clone(),
-                troops: *troops,
+                troops: actual_troops,
                 current_province: province_mesh.clone(),
                 target_province: None,
                 route_queue: Vec::new(),
@@ -343,8 +389,8 @@ pub fn apply_player_action(
             state.push_chronicle(
                 country_id.clone(),
                 format!(
-                    "Reclutados {} soldados en {} (costo ${:.0}M, mantenimiento -{:.2}M/mes).",
-                    troops, prov_name, cost_m, added_upkeep
+                    "Reclutados {} soldados desde desempleados en {} (costo ${:.1}M, mant. -{:.2}M/mes).",
+                    actual_troops, prov_name, actual_cost_m, added_upkeep
                 ),
             );
         }
@@ -383,6 +429,113 @@ pub fn apply_player_action(
                 unit.country_id,
                 format!("{} inicia marcha hacia {}.", unit.name, dest_label),
             );
+        }
+        PlayerAction::UpdateEconomicPolicy {
+            country_id,
+            interest_rate_pct,
+            tax_rate_pct,
+            infra_investment_pct,
+            social_investment_pct,
+        } => {
+            if let Some(c) = state.countries.get_mut(country_id) {
+                c.economy.interest_rate_pct = interest_rate_pct.clamp(1.0, 50.0);
+                c.economy.tax_rate_pct = tax_rate_pct.clamp(10.0, 40.0);
+                c.economy.infra_investment_pct = infra_investment_pct.clamp(0.5, 10.0);
+                c.economy.social_investment_pct = social_investment_pct.clamp(0.5, 12.0);
+                c.recompute_fiscal_snapshot();
+            }
+        }
+        PlayerAction::UpdateDefenseBudget {
+            country_id,
+            defense_budget_pct,
+        } => {
+            if let Some(c) = state.countries.get_mut(country_id) {
+                c.military.defense_budget_pct = defense_budget_pct.clamp(0.0, 6.0);
+                c.recompute_fiscal_snapshot();
+            }
+        }
+        PlayerAction::RunMilitaryDrills { country_id } => {
+            let mut ran = false;
+            if let Some(c) = state.countries.get_mut(country_id) {
+                if c.economy.treasury_usd_millions >= 200.0 {
+                    c.economy.treasury_usd_millions -= 200.0;
+                    c.military.readiness = (c.military.readiness + 6.0).min(100.0);
+                    ran = true;
+                }
+            }
+            if ran {
+                state.push_chronicle(
+                    country_id.clone(),
+                    "Maniobras militares completadas con éxito (+6% aprestamiento).",
+                );
+            }
+        }
+        PlayerAction::ExecutePoliticalDecree { country_id, decree } => {
+            let mut msg: Option<String> = None;
+            if let Some(c) = state.countries.get_mut(country_id) {
+                match decree {
+                    PoliticalDecreeKind::NationalDialogue => {
+                        if c.economy.treasury_usd_millions >= 250.0 {
+                            c.economy.treasury_usd_millions -= 250.0;
+                            c.stability = (c.stability + 5.0).min(98.0);
+                            msg = Some(
+                                "Se celebró una mesa de diálogo nacional en el Congreso (+5% estabilidad)."
+                                    .to_string(),
+                            );
+                        }
+                    }
+                    PoliticalDecreeKind::PublicCampaign => {
+                        if c.economy.treasury_usd_millions >= 180.0 {
+                            c.economy.treasury_usd_millions -= 180.0;
+                            if let Some(ruling) =
+                                c.political_parties.iter_mut().find(|p| p.is_ruling)
+                            {
+                                ruling.approval_pct = (ruling.approval_pct + 4.0).min(95.0);
+                            }
+                            msg = Some(
+                                "El partido de gobierno impulsó una campaña ciudadana (+4% aprobación)."
+                                    .to_string(),
+                            );
+                        }
+                    }
+                }
+            }
+            if let Some(m) = msg {
+                state.push_chronicle(country_id.clone(), m);
+            }
+        }
+        PlayerAction::ToggleCoalitionParty {
+            country_id,
+            party_acronym,
+        } => {
+            let mut msg: Option<String> = None;
+            if let Some(c) = state.countries.get_mut(country_id) {
+                let is_partner = c.coalition_parties.iter().any(|a| a == party_acronym);
+                let leader_name = c
+                    .political_parties
+                    .iter()
+                    .find(|p| &p.acronym == party_acronym)
+                    .map(|p| p.leader.full_name.clone())
+                    .unwrap_or_else(|| "Líder parlamentario".to_string());
+                if is_partner {
+                    c.coalition_parties.retain(|a| a != party_acronym);
+                    c.stability = (c.stability - 2.0).max(12.0);
+                    msg = Some(format!(
+                        "[{party_acronym}] abandonó la coalición en el Congreso."
+                    ));
+                } else if c.political_capital >= 20.0 {
+                    c.coalition_parties.push(party_acronym.clone());
+                    c.political_capital = (c.political_capital - 20.0).max(0.0);
+                    c.stability = (c.stability + 2.5).min(98.0);
+                    msg = Some(format!(
+                        "Coalición legislativa firmada con [{party_acronym}] (líder {leader_name})."
+                    ));
+                }
+                c.legislative_support_pct = c.compute_legislative_support_pct();
+            }
+            if let Some(m) = msg {
+                state.push_chronicle(country_id.clone(), m);
+            }
         }
         PlayerAction::AssignForeignMinister {
             country_id,
@@ -665,7 +818,11 @@ pub fn apply_player_action(
     }
 }
 
-fn build_initial_state(lua: &LuaEngine, difficulty: Difficulty) -> Result<GameState, String> {
+fn build_initial_state(
+    lua: &LuaEngine,
+    graph: &ProvinceGraph,
+    difficulty: Difficulty,
+) -> Result<GameState, String> {
     let mut countries = lua
         .load_initial_countries()
         .map_err(|e| format!("Error cargando países desde Lua 5.4: {e}"))?;
@@ -711,6 +868,7 @@ fn build_initial_state(lua: &LuaEngine, difficulty: Difficulty) -> Result<GameSt
         selected_province_mesh: None,
         selected_unit_id: None,
         countries,
+        regions: BTreeMap::new(),
         relations,
         units: Vec::new(),
         next_unit_id: 1,
@@ -728,26 +886,224 @@ fn build_initial_state(lua: &LuaEngine, difficulty: Difficulty) -> Result<GameSt
         pending_macro_archive: Vec::new(),
     };
 
+    let mut working_graph = graph.clone();
+    ensure_fallback_graph(&state.countries, &mut working_graph);
+    setup_initial_regions(&mut state, &working_graph, seed);
+
     state.push_chronicle(
         "LATAM",
-        "Selecciona una nación para configurar líderes, unidades, mercados y empresas iniciales.",
+        "Selecciona una nación para configurar líderes, regiones, unidades, mercados y empresas iniciales.",
     );
     Ok(state)
 }
 
 fn recompute_country_balances(countries: &mut BTreeMap<String, crate::models::CountryState>) {
     for country in countries.values_mut() {
-        let monthly_gdp = country.economy.gdp_usd_millions / 12.0;
-        let tax_rev = monthly_gdp * (country.economy.tax_rate_pct / 100.0);
-        let def_cost = monthly_gdp * (country.military.defense_budget_pct / 100.0);
-        let inf_cost = monthly_gdp * (country.economy.infra_investment_pct / 100.0);
-        let soc_cost = monthly_gdp * (country.economy.social_investment_pct / 100.0);
-        let debt_svc =
-            (country.economy.gdp_usd_millions * (country.economy.debt_to_gdp_pct / 100.0)) * 0.0045;
-        let upkeep = country.estimated_troop_upkeep_m();
-        country.economy.troop_upkeep_usd_millions = upkeep;
-        country.economy.last_monthly_balance =
-            tax_rev - (def_cost + upkeep + inf_cost + soc_cost + debt_svc);
+        country.recompute_fiscal_snapshot();
+    }
+}
+
+/// Distribuye la población nacional y los desempleados reales entre todas las regiones/provincias
+/// de cada país (ponderando capital, terreno y elevación) garantizando que la suma coincida.
+pub fn setup_initial_regions(state: &mut GameState, graph: &ProvinceGraph, seed: u64) {
+    state.regions.clear();
+    let mut rng = ChaCha8Rng::seed_from_u64(seed ^ 0xD340_69AF_2026);
+
+    let country_ids: Vec<String> = state.countries.keys().cloned().collect();
+    for cid in country_ids {
+        let Some(country) = state.countries.get(&cid) else {
+            continue;
+        };
+        let total_pop = country.population;
+        let target_unemp_pct = country.economy.unemployment_pct;
+        let capital_lower = country.capital.to_lowercase();
+
+        let mut provs: Vec<&ProvinceNode> =
+            graph.values().filter(|p| p.country_id == cid).collect();
+        provs.sort_by(|a, b| a.mesh_name.cmp(&b.mesh_name));
+        if provs.is_empty() {
+            continue;
+        }
+
+        let has_named_capital = provs
+            .iter()
+            .any(|p| p.name.to_lowercase().contains(&capital_lower) || p.terrain_type.eq_ignore_ascii_case("Capital"));
+
+        let mut weights: Vec<f64> = Vec::with_capacity(provs.len());
+        let mut capital_idx = 0_usize;
+        let mut best_weight = -1.0_f64;
+
+        for (idx, p) in provs.iter().enumerate() {
+            let is_cap = p.name.to_lowercase().contains(&capital_lower)
+                || p.terrain_type.eq_ignore_ascii_case("Capital")
+                || (!has_named_capital && idx == 0);
+            let cap_boost = if is_cap { 2.40 } else { 1.0 };
+            let terrain_factor = match p.terrain_type.as_str() {
+                "Capital" | "Llanura" | "Valle" | "Costa" => 1.25,
+                "Meseta" | "Altiplano" => 0.92,
+                "Selva" | "Desierto" | "Montaña" => 0.58,
+                _ => 1.0,
+            };
+            let elev_factor = (1.18 - p.elevation_avg * 0.22).clamp(0.55, 1.25);
+            let jitter = rng.random_range(0.75_f64..=1.32_f64);
+            let w = (cap_boost * terrain_factor * elev_factor * jitter).max(0.15);
+            if w > best_weight {
+                best_weight = w;
+                capital_idx = idx;
+            }
+            weights.push(w);
+        }
+
+        let weight_sum: f64 = weights.iter().sum::<f64>().max(0.001);
+        let mut reg_pops: Vec<u64> = Vec::with_capacity(provs.len());
+        let mut assigned_pop = 0_u64;
+        for w in &weights {
+            let share = ((total_pop as f64) * (*w / weight_sum)).floor() as u64;
+            let val = if total_pop >= provs.len() as u64 {
+                share.max(1)
+            } else {
+                share
+            };
+            assigned_pop = assigned_pop.saturating_add(val);
+            reg_pops.push(val);
+        }
+        if assigned_pop < total_pop {
+            reg_pops[capital_idx] = reg_pops[capital_idx].saturating_add(total_pop - assigned_pop);
+        } else if assigned_pop > total_pop {
+            let mut excess = assigned_pop - total_pop;
+            for pop_slot in &mut reg_pops {
+                if excess == 0 {
+                    break;
+                }
+                let take = (*pop_slot).saturating_sub(1).min(excess);
+                *pop_slot -= take;
+                excess -= take;
+            }
+        }
+
+        // Distribuir desempleo nacional proporcionalmente entre las fuerzas laborales regionales
+        let total_workforce: u64 = reg_pops
+            .iter()
+            .map(|&p| ((p as f64) * 0.48).round().max(1.0) as u64)
+            .sum();
+        let target_total_unemp = (((total_workforce as f64) * (target_unemp_pct / 100.0)).round()
+            as u64)
+            .min(total_workforce);
+
+        let mut unemp_weights: Vec<f64> = Vec::with_capacity(provs.len());
+        for &rp in &reg_pops {
+            let wf = ((rp as f64) * 0.48).max(1.0);
+            let local_var = rng.random_range(0.78_f64..=1.24_f64);
+            unemp_weights.push(wf * local_var);
+        }
+        let uw_sum: f64 = unemp_weights.iter().sum::<f64>().max(1.0);
+
+        let mut reg_unemps: Vec<u64> = Vec::with_capacity(provs.len());
+        let mut assigned_unemp = 0_u64;
+        for (idx, uw) in unemp_weights.iter().enumerate() {
+            let wf = ((reg_pops[idx] as f64) * 0.48).round().max(1.0) as u64;
+            let val = (((target_total_unemp as f64) * (*uw / uw_sum)).floor() as u64).min(wf);
+            assigned_unemp = assigned_unemp.saturating_add(val);
+            reg_unemps.push(val);
+        }
+        if assigned_unemp < target_total_unemp {
+            let mut rem = target_total_unemp - assigned_unemp;
+            for idx in 0..provs.len() {
+                if rem == 0 {
+                    break;
+                }
+                let wf = ((reg_pops[idx] as f64) * 0.48).round().max(1.0) as u64;
+                let room = wf.saturating_sub(reg_unemps[idx]);
+                let add = room.min(rem);
+                reg_unemps[idx] += add;
+                rem -= add;
+            }
+        }
+
+        for (idx, p) in provs.into_iter().enumerate() {
+            state.regions.insert(
+                p.mesh_name.clone(),
+                RegionState {
+                    mesh_name: p.mesh_name.clone(),
+                    country_id: cid.clone(),
+                    name: p.name.clone(),
+                    population: reg_pops[idx],
+                    unemployed: reg_unemps[idx],
+                    stationed_recruited: 0,
+                },
+            );
+        }
+    }
+}
+
+/// Sincroniza la población regional y la variación mensual del desempleo con el país tras el paso mensual Lua.
+pub fn sync_country_regions_after_month(
+    state: &mut GameState,
+    country_id: &str,
+    prev_unemp_pct: f64,
+) {
+    let Some(country) = state.countries.get(country_id) else {
+        return;
+    };
+    let target_pop = country.population;
+    let unemp_delta_pct = country.economy.unemployment_pct - prev_unemp_pct;
+
+    let keys: Vec<String> = state
+        .regions
+        .iter()
+        .filter(|(_, r)| r.country_id == country_id)
+        .map(|(k, _)| k.clone())
+        .collect();
+    if keys.is_empty() {
+        return;
+    }
+
+    let current_pop_sum: u64 = keys.iter().filter_map(|k| state.regions.get(k)).map(|r| r.population).sum();
+    if current_pop_sum > 0 && target_pop > 0 {
+        let ratio = (target_pop as f64) / (current_pop_sum as f64);
+        let mut new_sum = 0_u64;
+        let mut largest_key = keys[0].clone();
+        let mut largest_pop = 0_u64;
+
+        for k in &keys {
+            if let Some(reg) = state.regions.get_mut(k) {
+                let scaled = ((reg.population as f64) * ratio).round().max(1.0) as u64;
+                reg.population = scaled;
+                new_sum = new_sum.saturating_add(scaled);
+                if scaled >= largest_pop {
+                    largest_pop = scaled;
+                    largest_key = k.clone();
+                }
+            }
+        }
+        if let Some(largest) = state.regions.get_mut(&largest_key) {
+            if new_sum < target_pop {
+                largest.population = largest.population.saturating_add(target_pop - new_sum);
+            } else if new_sum > target_pop {
+                let excess = new_sum - target_pop;
+                largest.population = largest.population.saturating_sub(excess).max(1);
+            }
+        }
+    }
+
+    adjust_country_regional_unemployment(state, country_id, unemp_delta_pct);
+}
+
+/// Aplica un delta en puntos porcentuales de desempleo sobre las regiones del país
+/// conservando los recortes realizados por reclutamiento militar previo.
+pub fn adjust_country_regional_unemployment(
+    state: &mut GameState,
+    country_id: &str,
+    unemp_pct_delta: f64,
+) {
+    if unemp_pct_delta.abs() < 1e-6 {
+        return;
+    }
+    for reg in state.regions.values_mut().filter(|r| r.country_id == country_id) {
+        let wf = reg.workforce();
+        let people_delta = ((wf as f64) * (unemp_pct_delta / 100.0)).round() as i64;
+        let next_unemp = ((reg.unemployed as i64) + people_delta).clamp(0, wf as i64) as u64;
+        reg.unemployed = next_unemp;
     }
 }
 
@@ -795,6 +1151,7 @@ fn configure_campaign_for_country(
     // Asegura nodos de respaldo en memoria para cualquier país sin malla cargada aún
     let mut working_graph = graph.clone();
     ensure_fallback_graph(&state.countries, &mut working_graph);
+    setup_initial_regions(&mut state, &working_graph, seed);
 
     // 1. Configurar soldados predeterminados y número de unidades tácticas
     setup_initial_units(&mut state, &working_graph, seed);
@@ -1116,7 +1473,9 @@ fn advance_single_day(
             let at_war = state.country_at_war(&id);
             let global_cycle_snapshot = state.global_cycle.clone();
 
+            let mut prev_unemp_pct: Option<f64> = None;
             if let Some(country) = state.countries.get_mut(&id) {
+                prev_unemp_pct = Some(country.economy.unemployment_pct);
                 // Preservamos la tesorería diaria para no duplicar el cobro mensual en Lua
                 let daily_treasury = country.economy.treasury_usd_millions;
                 let step_ctx = LuaStepContext {
@@ -1146,6 +1505,9 @@ fn advance_single_day(
                 let budget_cap = (defense_alloc * if at_war { 3.5 } else { 2.5 }).max(140.0);
                 country.military.ai_military_budget_m =
                     (country.military.ai_military_budget_m + monthly_topup).min(budget_cap);
+            }
+            if let Some(prev_u) = prev_unemp_pct {
+                sync_country_regions_after_month(state, &id, prev_u);
             }
         }
 
@@ -1525,10 +1887,13 @@ fn step_companies_and_stocks(
 
     for (cid, unemp_delta, gdp_delta) in unemp_adjustments {
         if let Some(c) = state.countries.get_mut(&cid) {
-            c.economy.unemployment_pct = (c.economy.unemployment_pct + unemp_delta).clamp(2.2, 34.0);
+            let prev_u = c.economy.unemployment_pct;
+            c.economy.unemployment_pct = (prev_u + unemp_delta).clamp(2.2, 34.0);
+            let applied_delta = c.economy.unemployment_pct - prev_u;
             if gdp_delta != 0.0 {
                 c.economy.gdp_usd_millions = (c.economy.gdp_usd_millions + gdp_delta).max(100.0);
             }
+            adjust_country_regional_unemployment(state, &cid, applied_delta);
         }
     }
 
@@ -1682,14 +2047,19 @@ fn try_found_company_in(
     let inserted_idx = state.companies.len() - 1;
 
     // Impacto inmediato y lógico en empleo (baja desempleo) y PIB del país
+    let mut applied_unemp_delta = 0.0_f64;
     if let Some(c) = state.countries.get_mut(country_id) {
         let workforce = ((c.population as f64) * 0.48).max(120_000.0);
         let unemp_reduction = ((employees as f64 / workforce) * 100.0 * 1.4).clamp(0.05, 1.4);
-        c.economy.unemployment_pct = (c.economy.unemployment_pct - unemp_reduction).max(2.2);
+        let prev_u = c.economy.unemployment_pct;
+        c.economy.unemployment_pct = (prev_u - unemp_reduction).max(2.2);
+        applied_unemp_delta = c.economy.unemployment_pct - prev_u;
         c.economy.corporate_gdp_bonus_m += annual_gdp_contribution_m;
         c.economy.gdp_usd_millions += annual_gdp_contribution_m * 0.25;
         c.economy.gdp_growth_pct = (c.economy.gdp_growth_pct + 0.08).min(11.5);
+        c.recompute_fiscal_snapshot();
     }
+    adjust_country_regional_unemployment(state, country_id, applied_unemp_delta);
 
     if log_chronicle {
         state.push_chronicle(

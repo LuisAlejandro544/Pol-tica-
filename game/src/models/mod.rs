@@ -134,6 +134,16 @@ pub struct EconomyState {
     pub country_risk_bps: f64,
     #[serde(default)]
     pub corporate_tax_revenue_m: f64,
+    #[serde(default)]
+    pub monthly_tax_revenue_m: f64,
+    #[serde(default)]
+    pub monthly_defense_cost_m: f64,
+    #[serde(default)]
+    pub monthly_infra_cost_m: f64,
+    #[serde(default)]
+    pub monthly_social_cost_m: f64,
+    #[serde(default)]
+    pub monthly_debt_service_m: f64,
 }
 
 /// Estado militar y defensa nacional.
@@ -273,6 +283,57 @@ pub struct ProvinceNode {
 
 pub type ProvinceGraph = BTreeMap<String, ProvinceNode>;
 
+/// Demografía, desempleo local y capacidad de reclutamiento por región/estado de un país.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegionState {
+    pub mesh_name: String,
+    pub country_id: String,
+    pub name: String,
+    pub population: u64,
+    pub unemployed: u64,
+    pub stationed_recruited: u64,
+}
+
+impl RegionState {
+    /// Porcentaje exacto de la población de esta región respecto al total nacional (0..100).
+    pub fn population_share_pct(&self, country_population: u64) -> f64 {
+        if country_population == 0 {
+            return 0.0;
+        }
+        ((self.population as f64) / (country_population as f64)) * 100.0
+    }
+
+    /// Población económicamente activa estimada en la región (~48% de sus habitantes).
+    pub fn workforce(&self) -> u64 {
+        ((self.population as f64) * 0.48).round().max(1.0) as u64
+    }
+
+    /// Tasa de desempleo dentro de la fuerza laboral de la región (0..100).
+    pub fn unemployment_rate_pct(&self) -> f64 {
+        let wf = self.workforce();
+        if wf == 0 {
+            return 0.0;
+        }
+        ((self.unemployed as f64) / (wf as f64) * 100.0).clamp(0.0, 100.0)
+    }
+
+    /// Porcentaje de desempleados respecto a la población total regional (0..100).
+    pub fn unemployed_of_population_pct(&self) -> f64 {
+        if self.population == 0 {
+            return 0.0;
+        }
+        ((self.unemployed as f64) / (self.population as f64) * 100.0).clamp(0.0, 100.0)
+    }
+
+    /// Tope máximo de soldados reclutables en la región según sus desempleados reales
+    /// y su límite demográfico regional (máximo 6% de la población total regional).
+    pub fn max_recruitable(&self) -> u64 {
+        let demo_cap = ((self.population as f64) * 0.06).floor() as u64;
+        let remaining_demo_cap = demo_cap.saturating_sub(self.stationed_recruited);
+        self.unemployed.min(remaining_demo_cap)
+    }
+}
+
 /// Perfil estratégico de la IA local para naciones no controladas por el jugador.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AiPersonality {
@@ -362,6 +423,35 @@ impl CountryState {
     /// Costo mensual de mantenimiento por soldados activos en millones de USD.
     pub fn estimated_troop_upkeep_m(&self) -> f64 {
         (self.military.active_troops as f64 / 1_000.0) * 1.35
+    }
+
+    /// Recalcula al instante ingresos fiscales brutos, partidas de gasto y balance neto mensual
+    /// usando las mismas ecuaciones de `scripts/game_rules.lua`.
+    pub fn recompute_fiscal_snapshot(&mut self) {
+        let monthly_gdp = (self.economy.gdp_usd_millions / 12.0).max(1.0);
+        let corp_tax = (self.economy.corporate_gdp_bonus_m / 12.0)
+            * (self.economy.tax_rate_pct / 100.0)
+            * 0.42;
+        let tax_revenue = monthly_gdp * (self.economy.tax_rate_pct / 100.0) + corp_tax;
+        let defense_cost = monthly_gdp * (self.military.defense_budget_pct / 100.0);
+        let infra_cost = monthly_gdp * (self.economy.infra_investment_pct / 100.0);
+        let social_cost = monthly_gdp * (self.economy.social_investment_pct / 100.0);
+        let upkeep = self.estimated_troop_upkeep_m();
+        let monthly_debt_yield =
+            0.0028 + (self.economy.country_risk_bps.clamp(85.0, 2600.0) / 10_000.0) * 0.032;
+        let debt_service =
+            (self.economy.gdp_usd_millions * (self.economy.debt_to_gdp_pct / 100.0))
+                * monthly_debt_yield;
+
+        self.economy.corporate_tax_revenue_m = corp_tax;
+        self.economy.monthly_tax_revenue_m = tax_revenue;
+        self.economy.monthly_defense_cost_m = defense_cost;
+        self.economy.monthly_infra_cost_m = infra_cost;
+        self.economy.monthly_social_cost_m = social_cost;
+        self.economy.monthly_debt_service_m = debt_service;
+        self.economy.troop_upkeep_usd_millions = upkeep;
+        self.economy.last_monthly_balance =
+            tax_revenue - (defense_cost + upkeep + infra_cost + social_cost + debt_service);
     }
 
     /// Índice compuesto de poder militar para comparativas diplomáticas e IA.
@@ -480,6 +570,13 @@ pub struct CampaignThumbnail {
     pub companies_count: usize,
 }
 
+/// Decretos ejecutivos instantáneos disponibles en Política Interna.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PoliticalDecreeKind {
+    NationalDialogue,
+    PublicCampaign,
+}
+
 /// Acciones emitidas desde la interfaz que deben preservarse aunque el hilo de simulación esté ocupado.
 #[derive(Debug, Clone)]
 pub enum PlayerAction {
@@ -492,6 +589,28 @@ pub enum PlayerAction {
     OrderUnitMove {
         unit_id: u64,
         target_province: String,
+    },
+    UpdateEconomicPolicy {
+        country_id: String,
+        interest_rate_pct: f64,
+        tax_rate_pct: f64,
+        infra_investment_pct: f64,
+        social_investment_pct: f64,
+    },
+    UpdateDefenseBudget {
+        country_id: String,
+        defense_budget_pct: f64,
+    },
+    RunMilitaryDrills {
+        country_id: String,
+    },
+    ExecutePoliticalDecree {
+        country_id: String,
+        decree: PoliticalDecreeKind,
+    },
+    ToggleCoalitionParty {
+        country_id: String,
+        party_acronym: String,
     },
     AssignForeignMinister {
         country_id: String,
@@ -555,6 +674,8 @@ pub struct GameState {
     pub selected_province_mesh: Option<String>,
     pub selected_unit_id: Option<u64>,
     pub countries: BTreeMap<String, CountryState>,
+    #[serde(default)]
+    pub regions: BTreeMap<String, RegionState>,
     pub relations: BTreeMap<(String, String), DiplomaticRelation>,
     pub units: Vec<ArmyUnit>,
     pub next_unit_id: u64,

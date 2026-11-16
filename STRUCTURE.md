@@ -44,34 +44,34 @@ Descripción exacta de carpetas y responsabilidades de cada módulo en el reposi
 │   └── src/
 │       ├── lib.rs                    # Entrada android_main(AndroidApp) (con cacheDir + PIPELINE_CACHE) y run_desktop()
 │       ├── main.rs                   # Binario de escritorio
-│       ├── models/mod.rs             # Structs y enums (CountryState, LeaderProfile, ForeignMinister, DiplomaticRelation, ArmyUnit, CompanyEntity, GameState)
+│       ├── models/mod.rs             # Structs y enums (CountryState, RegionState, LeaderProfile, ForeignMinister, DiplomaticRelation, ArmyUnit, CompanyEntity, GameState)
 │       ├── cache/mod.rs              # Caché nativa (mapa 3D/grafo, shaders wgpu, bytecode Lua 5.4, crónica/gráficas/miniaturas)
 │       ├── map/
 │       │   ├── mod.rs
 │       │   ├── glb_loader.rs         # Lector glTF/GLB + raycasting 3D + grafo provincial (`build_province_graph`)
 │       │   ├── renderer_3d.rs        # Renderizador 3D `wgpu` + `egui-wgpu` con `PipelineCache` persistente
 │       │   └── svg_loader.rs         # Incrustación `assets` (`include_dir!`) y lector SVG
-│       ├── lua_bridge/mod.rs         # VM Lua 5.4 (mlua) con carga/guardado de bytecode precompilado
-│       ├── ai/mod.rs                 # IA local paralela (rayon) con presupuesto militar, tope paz/guerra, refuerzo sin spam, elecciones y diplomacia
+│       ├── lua_bridge/mod.rs         # VM Lua 5.4 (mlua) con carga/guardado de bytecode precompilado y desglose fiscal mensual
+│       ├── ai/mod.rs                 # IA local paralela (rayon) con presupuesto militar, cupo por población/desempleo regional, refuerzo sin spam, elecciones y diplomacia
 │       ├── engine/
-│       │   ├── mod.rs                # Simulación continua en tiempo real (días, tropas, bolsa, empresas, misiones de 0 días y volcado a caché)
+│       │   ├── mod.rs                # Simulación continua en tiempo real (días, regiones/desempleo, tropas, bolsa, empresas, PlayerAction y volcado a caché)
 │       │   └── leaders.rs            # Generador aleatorio de Presidente, oposición y candidatos a Ministro de Relaciones Exteriores
 │       └── ui/
 │           ├── mod.rs                # Router multipantalla (HorizonteLatamApp), popups modales y acumulador de tiempo real
-│           ├── theme.rs              # Paleta táctica, marcos flotantes con sombra, íconos vectoriales y biseles
+│           ├── theme.rs              # Paleta táctica, marcos flotantes con sombra, formato numérico exacto, íconos y biseles
 │           ├── components/
-│           │   ├── chrome.rs         # HUD superior y dock inferior (fijo en gestión, flotante sobre el mapa)
+│           │   ├── chrome.rs         # HUD superior (incluye flujo neto mensual en TESORERÍA) y dock inferior
 │           │   └── map_canvas.rs     # Lienzo 3D interactivo borde a borde con fichas militares separadas
 │           └── screens/
 │               ├── main_menu.rs
 │               ├── country_select.rs
-│               ├── loading_screen.rs # Pantalla de carga que configura unidades iniciales y empresas aleatorias al elegir país
-│               ├── map_screen.rs     # Visor 3D 100% pantalla completa + reclutamiento directo en región propia y crónica plegable
-│               ├── economy_screen.rs
+│               ├── loading_screen.rs # Pantalla de carga que configura regiones, unidades iniciales y empresas aleatorias al elegir país
+│               ├── map_screen.rs     # Visor 3D 100% pantalla completa + población/desempleo regional, reclutamiento libre y crónica plegable
+│               ├── economy_screen.rs # Presupuesto fiscal mensual detallado (ingresos brutos + egresos) y política económica
 │               ├── companies_screen.rs # Bolsa regional, empresas dinámicas, productos, empleos y gráficas
 │               ├── politics_screen.rs  # Mesa circular del Congreso con sillas pintadas por partido, tarjetas y decretos
 │               ├── diplomacy_screen.rs # Cancillería: asignación de Ministro (popup), estadísticas aleatorias y misiones instantáneas (0 días)
-│               ├── military_screen.rs
+│               ├── military_screen.rs  # Reclutamiento libre desde desempleados regionales, detalle demográfico por provincia y órdenes de marcha
 │               └── settings_screen.rs
 ├── README.md
 ├── ROADMAP.md

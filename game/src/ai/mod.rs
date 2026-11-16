@@ -228,23 +228,42 @@ fn decide_for_country(
         }
     };
 
-    let candidate_batch = (desired_batch.min(troop_deficit) / 500) * 500;
-    if cooldown_ready && candidate_batch >= 500 && fiscal_healthy {
-        let batch_cost_m = (candidate_batch as f64 / 1_000.0) * 70.0;
-        let projected_upkeep =
-            ((country.military.active_troops + candidate_batch) as f64 / 1_000.0) * 1.35;
+    // Evaluar regiones propias con desempleados y cupo demográfico disponible para reclutamiento
+    let mut recruitable_regions: Vec<(String, u64)> = state
+        .regions
+        .values()
+        .filter(|r| r.country_id == country.id)
+        .filter_map(|r| {
+            let cap = r.max_recruitable();
+            if cap >= 100 {
+                Some((r.mesh_name.clone(), cap))
+            } else {
+                None
+            }
+        })
+        .collect();
+    recruitable_regions.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
 
-        if country.military.ai_military_budget_m >= batch_cost_m
-            && country.economy.treasury_usd_millions >= min_reserve + batch_cost_m
-            && projected_upkeep <= max_upkeep_budget
-        {
-            recruit_troops = candidate_batch;
+    let candidate_batch = desired_batch.min(troop_deficit);
+    if cooldown_ready && candidate_batch >= 100 && fiscal_healthy && !recruitable_regions.is_empty()
+    {
+        // Elige entre las 2 regiones con mayor disponibilidad laboral/demográfica
+        let pick_pool = recruitable_regions.len().min(2);
+        let (chosen_mesh, region_cap) = recruitable_regions[rng.random_range(0..pick_pool)].clone();
+        let capped_batch = candidate_batch.min(region_cap);
+        if capped_batch >= 100 {
+            let batch_cost_m = (capped_batch as f64 / 1_000.0) * 70.0;
+            let projected_upkeep =
+                ((country.military.active_troops + capped_batch) as f64 / 1_000.0) * 1.35;
+
+            if country.military.ai_military_budget_m >= batch_cost_m
+                && country.economy.treasury_usd_millions >= min_reserve + batch_cost_m
+                && projected_upkeep <= max_upkeep_budget
+            {
+                recruit_troops = capped_batch;
+                recruit_province = Some(chosen_mesh);
+            }
         }
-    }
-
-    if recruit_troops > 0 && !own_provinces.is_empty() {
-        let idx = rng.random_range(0..own_provinces.len());
-        recruit_province = Some(own_provinces[idx].clone());
     }
 
     // 3. Movimiento estratégico de unidades ociosas entre estados del país (o rivales en guerra)
@@ -453,21 +472,42 @@ pub fn apply_ai_decisions(
 
             let cooldown_days = if at_war { 18 } else { 30 };
             let min_reserve = compute_ai_min_treasury_reserve(country);
-            let cost_m = (d.recruit_troops as f64 / 1_000.0) * 70.0;
-            if d.recruit_troops > 0
-                && total_days.saturating_sub(country.military.last_ai_recruit_day) >= cooldown_days
-                && country.military.ai_military_budget_m >= cost_m
-                && country.economy.treasury_usd_millions >= cost_m + min_reserve
-            {
-                country.military.ai_military_budget_m =
-                    (country.military.ai_military_budget_m - cost_m).max(0.0);
-                country.military.last_ai_recruit_day = total_days;
-                country.economy.treasury_usd_millions -= cost_m;
-                country.military.active_troops += d.recruit_troops;
-                country.economy.troop_upkeep_usd_millions = country.estimated_troop_upkeep_m();
-                if let Some(prov) = d.recruit_province.clone() {
-                    recruited_info = Some((prov, d.recruit_troops, country.name.clone()));
+            if d.recruit_troops > 0 {
+                if let Some(prov_mesh) = d.recruit_province.clone() {
+                    let region_cap = state
+                        .regions
+                        .get(&prov_mesh)
+                        .filter(|r| r.country_id == d.country_id)
+                        .map(|r| r.max_recruitable())
+                        .unwrap_or(0);
+                    let actual_troops = d.recruit_troops.min(region_cap);
+                    let cost_m = (actual_troops as f64 / 1_000.0) * 70.0;
+                    if actual_troops > 0
+                        && total_days.saturating_sub(country.military.last_ai_recruit_day)
+                            >= cooldown_days
+                        && country.military.ai_military_budget_m >= cost_m
+                        && country.economy.treasury_usd_millions >= cost_m + min_reserve
+                    {
+                        country.military.ai_military_budget_m =
+                            (country.military.ai_military_budget_m - cost_m).max(0.0);
+                        country.military.last_ai_recruit_day = total_days;
+                        country.economy.treasury_usd_millions -= cost_m;
+                        country.military.active_troops += actual_troops;
+                        let workforce = ((country.population as f64) * 0.48).max(1.0);
+                        let unemp_drop = ((actual_troops as f64) / workforce) * 100.0;
+                        country.economy.unemployment_pct =
+                            (country.economy.unemployment_pct - unemp_drop).clamp(0.5, 34.0);
+                        country.recompute_fiscal_snapshot();
+                        recruited_info = Some((prov_mesh, actual_troops, country.name.clone()));
+                    }
                 }
+            }
+        }
+
+        if let Some((ref prov_mesh, troops, _)) = recruited_info {
+            if let Some(reg) = state.regions.get_mut(prov_mesh) {
+                reg.unemployed = reg.unemployed.saturating_sub(troops);
+                reg.stationed_recruited = reg.stationed_recruited.saturating_add(troops);
             }
         }
 

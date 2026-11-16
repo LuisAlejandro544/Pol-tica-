@@ -129,7 +129,7 @@ function rules.calculate_monthly_economy(econ)
   local infra_cost = monthly_gdp * ((econ.infra_investment_pct or 3.5) / 100.0)
   local social_cost = monthly_gdp * ((econ.social_investment_pct or 4.5) / 100.0)
 
-  local monthly_debt_yield = (0.0032 + (country_risk_bps / 10000.0) * 0.085)
+  local monthly_debt_yield = (0.0028 + (country_risk_bps / 10000.0) * 0.032)
   local debt_service = (new_gdp * ((econ.debt_to_gdp_pct or 45.0) / 100.0)) * monthly_debt_yield
   local net_balance = tax_revenue - (defense_cost + troop_upkeep_m + infra_cost + social_cost + debt_service)
 
@@ -164,6 +164,11 @@ function rules.calculate_monthly_economy(econ)
     treasury_usd_millions = new_treasury,
     debt_to_gdp_pct = new_debt_pct,
     monthly_net_balance = net_balance,
+    monthly_tax_revenue_m = tax_revenue,
+    monthly_defense_cost_m = defense_cost,
+    monthly_infra_cost_m = infra_cost,
+    monthly_social_cost_m = social_cost,
+    monthly_debt_service_m = debt_service,
     troop_upkeep_m = troop_upkeep_m,
     unemployment_pct = new_unemployment,
     trade_balance_usd_millions = trade_balance_m,

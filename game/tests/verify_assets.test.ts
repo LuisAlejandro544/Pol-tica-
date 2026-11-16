@@ -697,3 +697,111 @@ test('IA militar: presupuesto dedicado, tope de tropas (paz vs guerra), límite 
   }
 });
 
+test('Ingresos fiscales visibles, corrección de deuda/políticas y reclutamiento libre desde desempleados regionales (Jugador e IA)', () => {
+  const rulesLua = fs.readFileSync(path.resolve('game/assets/scripts/game_rules.lua'), 'utf8');
+  const modelsRs = fs.readFileSync(path.resolve('game/src/models/mod.rs'), 'utf8');
+  const luaBridgeRs = fs.readFileSync(path.resolve('game/src/lua_bridge/mod.rs'), 'utf8');
+  const engineRs = fs.readFileSync(path.resolve('game/src/engine/mod.rs'), 'utf8');
+  const aiRs = fs.readFileSync(path.resolve('game/src/ai/mod.rs'), 'utf8');
+  const themeRs = fs.readFileSync(path.resolve('game/src/ui/theme.rs'), 'utf8');
+  const chromeRs = fs.readFileSync(path.resolve('game/src/ui/components/chrome.rs'), 'utf8');
+  const economyRs = fs.readFileSync(path.resolve('game/src/ui/screens/economy_screen.rs'), 'utf8');
+  const politicsRs = fs.readFileSync(path.resolve('game/src/ui/screens/politics_screen.rs'), 'utf8');
+  const mapScreenRs = fs.readFileSync(path.resolve('game/src/ui/screens/map_screen.rs'), 'utf8');
+  const militaryRs = fs.readFileSync(path.resolve('game/src/ui/screens/military_screen.rs'), 'utf8');
+  const uiModRs = fs.readFileSync(path.resolve('game/src/ui/mod.rs'), 'utf8');
+
+  // 1. Ingresos fiscales brutos visibles, servicio de deuda ajustado y acciones replayables
+  assert.ok(rulesLua.includes('monthly_debt_yield = (0.0028'), 'game_rules.lua debe moderar el servicio mensual de deuda');
+  for (const field of [
+    'monthly_tax_revenue_m',
+    'monthly_defense_cost_m',
+    'monthly_infra_cost_m',
+    'monthly_social_cost_m',
+    'monthly_debt_service_m',
+  ]) {
+    assert.ok(rulesLua.includes(field), `game_rules.lua debe retornar ${field}`);
+    assert.ok(modelsRs.includes(field), `EconomyState debe almacenar ${field}`);
+    assert.ok(luaBridgeRs.includes(field), `lua_bridge/mod.rs debe sincronizar ${field}`);
+  }
+  assert.ok(modelsRs.includes('pub fn recompute_fiscal_snapshot'), 'CountryState debe exponer recompute_fiscal_snapshot');
+  for (const action of [
+    'UpdateEconomicPolicy',
+    'UpdateDefenseBudget',
+    'RunMilitaryDrills',
+    'ExecutePoliticalDecree',
+    'ToggleCoalitionParty',
+  ]) {
+    assert.ok(modelsRs.includes(action), `PlayerAction debe incluir ${action}`);
+    assert.ok(engineRs.includes(`PlayerAction::${action}`), `engine/mod.rs debe aplicar ${action}`);
+  }
+  assert.ok(economyRs.includes('PRESUPUESTO FISCAL MENSUAL'), 'economy_screen.rs debe mostrar el desglose fiscal mensual');
+  assert.ok(economyRs.includes('Ingresos Fiscales'), 'economy_screen.rs debe mostrar ingresos fiscales brutos');
+  assert.ok(economyRs.includes('Gastos Totales'), 'economy_screen.rs debe mostrar gastos totales');
+  assert.ok(economyRs.includes('Balance Neto'), 'economy_screen.rs debe mostrar balance neto mensual y diario');
+  assert.ok(economyRs.includes('recompute_fiscal_snapshot'), 'economy_screen.rs debe recalcular el balance fiscal al instante');
+  assert.ok(economyRs.includes('UpdateEconomicPolicy'), 'economy_screen.rs debe emitir PlayerAction::UpdateEconomicPolicy');
+  assert.ok(chromeRs.includes('last_monthly_balance'), 'Top HUD debe mostrar el flujo neto mensual en TESORERÍA');
+  assert.ok(uiModRs.includes('monthly_gdp * (opt.treasury_delta_pct * 4.0)'), 'ui/mod.rs debe escalar eventos sobre PIB mensual');
+
+  // 2. Población y desempleo por región + reclutamiento libre para Jugador e IA
+  assert.ok(modelsRs.includes('pub struct RegionState'), 'models/mod.rs debe definir RegionState');
+  assert.ok(modelsRs.includes('pub fn population_share_pct'), 'RegionState debe calcular % nacional de población');
+  assert.ok(modelsRs.includes('pub fn unemployment_rate_pct'), 'RegionState debe calcular % de desempleo');
+  assert.ok(modelsRs.includes('pub fn unemployed_of_population_pct'), 'RegionState debe calcular % de desempleados sobre población');
+  assert.ok(modelsRs.includes('pub fn max_recruitable'), 'RegionState debe calcular cupo máximo reclutable desde desempleados');
+  assert.ok(modelsRs.includes('pub regions: BTreeMap<String, RegionState>'), 'GameState debe guardar el mapa de regiones');
+
+  assert.ok(engineRs.includes('fn setup_initial_regions'), 'engine/mod.rs debe inicializar población y desempleados por región');
+  assert.ok(engineRs.includes('fn sync_country_regions_after_month'), 'engine/mod.rs debe sincronizar demografía regional cada mes');
+  assert.ok(engineRs.includes('fn adjust_country_regional_unemployment'), 'engine/mod.rs debe reflejar empleos/quiebras en desempleados regionales');
+  assert.ok(engineRs.includes('fn recruit_from_region'), 'engine/mod.rs debe convertir desempleados regionales en soldados');
+
+  assert.ok(aiRs.includes('recruitable_regions'), 'ai/mod.rs debe filtrar regiones propias reclutables');
+  assert.ok(aiRs.includes('max_recruitable()'), 'ai/mod.rs debe respetar el cupo por población y desempleados regionales');
+  assert.ok(aiRs.includes('reg.unemployed = reg.unemployed.saturating_sub'), 'ai/mod.rs debe descontar desempleados regionales al reclutar');
+  assert.ok(aiRs.includes('reg.stationed_recruited = reg.stationed_recruited.saturating_add'), 'ai/mod.rs debe registrar reclutados por región');
+
+  assert.ok(themeRs.includes('pub fn format_exact_count'), 'theme.rs debe formatear cifras exactas de población y desempleados');
+  assert.ok(mapScreenRs.includes('Población:'), 'map_screen.rs debe mostrar población exacta y % nacional de la región');
+  assert.ok(mapScreenRs.includes('Desempleados:'), 'map_screen.rs debe mostrar desempleados exactos y % de la región');
+  assert.ok(mapScreenRs.includes('Cupo reclutable:'), 'map_screen.rs debe mostrar cupo reclutable regional');
+  assert.ok(mapScreenRs.includes('egui::DragValue::new') && mapScreenRs.includes('egui::Slider::new'), 'map_screen.rs debe permitir elegir cantidad libre de reclutamiento');
+  assert.ok(militaryRs.includes('Población regional:'), 'military_screen.rs debe mostrar población exacta y % por región');
+  assert.ok(militaryRs.includes('Desempleados:'), 'military_screen.rs debe mostrar desempleados exactos y % por región');
+  assert.ok(militaryRs.includes('Cupo reclutable:'), 'military_screen.rs debe mostrar cupo reclutable en Defensa');
+  assert.ok(militaryRs.includes('egui::DragValue::new') && militaryRs.includes('egui::Slider::new'), 'military_screen.rs debe permitir elegir cantidad libre de soldados');
+  assert.ok(politicsRs.includes('ToggleCoalitionParty') && politicsRs.includes('ExecutePoliticalDecree'), 'politics_screen.rs debe emitir PlayerAction al worker');
+  assert.ok(uiModRs.includes('recruit_troops_amount'), 'ui/mod.rs debe mantener cantidad elegida de reclutamiento');
+
+  // 3. Verificación estructural y balanceo de todos los archivos editados
+  for (const [label, src] of [
+    ['game/src/models/mod.rs', modelsRs],
+    ['game/src/lua_bridge/mod.rs', luaBridgeRs],
+    ['game/src/engine/mod.rs', engineRs],
+    ['game/src/ai/mod.rs', aiRs],
+    ['game/src/ui/theme.rs', themeRs],
+    ['game/src/ui/components/chrome.rs', chromeRs],
+    ['game/src/ui/screens/economy_screen.rs', economyRs],
+    ['game/src/ui/screens/politics_screen.rs', politicsRs],
+    ['game/src/ui/screens/map_screen.rs', mapScreenRs],
+    ['game/src/ui/screens/military_screen.rs', militaryRs],
+    ['game/src/ui/mod.rs', uiModRs],
+  ] as const) {
+    assert.ok(src.startsWith('//! Propósito del archivo:'), `${label} debe empezar con comentario explicativo`);
+    assert.equal(/Stroke::new\(\s*\d+\.\d+\s*,/.test(src), false, `Falta sufijo _f32 en Stroke::new en ${label}`);
+    assert.equal(src.includes('.fixed_width('), false, `No usar .fixed_width() en ${label}`);
+    let braces = 0;
+    let parens = 0;
+    for (const ch of src) {
+      if (ch === '{') braces++;
+      else if (ch === '}') braces--;
+      else if (ch === '(') parens++;
+      else if (ch === ')') parens--;
+    }
+    assert.equal(braces, 0, `Llaves desbalanceadas en ${label}`);
+    assert.equal(parens, 0, `Paréntesis desbalanceados en ${label}`);
+  }
+});
+
+

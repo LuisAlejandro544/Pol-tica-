@@ -199,7 +199,7 @@ impl LuaEngine {
                 .map(|p| p.seats_pct)
                 .unwrap_or(45.0);
 
-            let state = CountryState {
+            let mut state = CountryState {
                 id: id.clone(),
                 name: row.get("name")?,
                 capital: row.get("capital")?,
@@ -231,6 +231,11 @@ impl LuaEngine {
                     trade_balance_usd_millions: 0.0,
                     country_risk_bps: initial_risk,
                     corporate_tax_revenue_m: 0.0,
+                    monthly_tax_revenue_m: 0.0,
+                    monthly_defense_cost_m: 0.0,
+                    monthly_infra_cost_m: 0.0,
+                    monthly_social_cost_m: 0.0,
+                    monthly_debt_service_m: 0.0,
                 },
                 military: MilitaryState {
                     active_troops,
@@ -252,6 +257,7 @@ impl LuaEngine {
                 foreign_minister: None,
                 minister_candidates: Vec::new(),
             };
+            state.recompute_fiscal_snapshot();
             countries.insert(id, state);
         }
 
@@ -414,6 +420,11 @@ impl LuaEngine {
         country.economy.treasury_usd_millions = econ_out.get("treasury_usd_millions")?;
         country.economy.debt_to_gdp_pct = econ_out.get("debt_to_gdp_pct")?;
         country.economy.last_monthly_balance = econ_out.get("monthly_net_balance")?;
+        country.economy.monthly_tax_revenue_m = econ_out.get("monthly_tax_revenue_m")?;
+        country.economy.monthly_defense_cost_m = econ_out.get("monthly_defense_cost_m")?;
+        country.economy.monthly_infra_cost_m = econ_out.get("monthly_infra_cost_m")?;
+        country.economy.monthly_social_cost_m = econ_out.get("monthly_social_cost_m")?;
+        country.economy.monthly_debt_service_m = econ_out.get("monthly_debt_service_m")?;
         country.economy.troop_upkeep_usd_millions = econ_out.get("troop_upkeep_m")?;
         country.economy.unemployment_pct = econ_out.get("unemployment_pct")?;
         country.economy.trade_balance_usd_millions = econ_out.get("trade_balance_usd_millions")?;

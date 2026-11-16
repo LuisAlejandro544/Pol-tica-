@@ -10,9 +10,9 @@ use crate::models::{GameState, MapMode, ProvinceData, ProvinceGraph, ScreenRoute
 use crate::ui::components::map_canvas::{render_latam_map, MapCanvasConfig, MapViewportState};
 use crate::ui::theme::{
     card_frame, draw_corner_rivets, draw_country_shield, draw_gauge_bar, draw_section_header,
-    floating_hud_frame, format_population, format_usd_millions, game_button, well_frame, GameIcon,
-    ACCENT_CRIMSON, ACCENT_CYAN, ACCENT_EMERALD, ACCENT_GOLD, BG_PANEL, BORDER_BRASS,
-    BORDER_BRASS_DIM, SAFE_RIGHT_PAD, TEXT_MUTED, TEXT_PRIMARY,
+    floating_hud_frame, format_exact_count, format_population, format_usd_millions, game_button,
+    step_button, well_frame, GameIcon, ACCENT_CRIMSON, ACCENT_CYAN, ACCENT_EMERALD, ACCENT_GOLD,
+    BG_PANEL, BORDER_BRASS, BORDER_BRASS_DIM, SAFE_RIGHT_PAD, TEXT_MUTED, TEXT_PRIMARY,
 };
 use eframe::egui_wgpu::wgpu;
 use egui::{Align, CornerRadius, Layout, Margin, Rect, RichText, Stroke, Ui, Vec2};
@@ -40,6 +40,7 @@ pub fn render_map_screen(
     map_mode: &mut MapMode,
     viewport: &mut MapViewportState,
     show_country_popup: &mut bool,
+    recruit_troops_amount: &mut u64,
 ) -> MapScreenResult {
     let mut result = MapScreenResult {
         open_diplomacy_with: None,
@@ -366,6 +367,7 @@ pub fn render_map_screen(
                                         .filter(|u| u.current_province == *prov_mesh)
                                         .map(|u| u.troops)
                                         .sum();
+                                    let region_opt = state.regions.get(prov_mesh).cloned();
                                     ui.add_space(4.0);
                                     card_frame(Some(ACCENT_CYAN)).inner_margin(6.0).show(
                                         ui,
@@ -388,6 +390,50 @@ pub fn render_map_screen(
                                                 .color(TEXT_MUTED),
                                             );
 
+                                            if let Some(reg) = region_opt.as_ref() {
+                                                let pop_share =
+                                                    reg.population_share_pct(country.population);
+                                                let unemp_rate = reg.unemployment_rate_pct();
+                                                let unemp_pop_pct =
+                                                    reg.unemployed_of_population_pct();
+                                                let reg_cap = reg.max_recruitable();
+                                                ui.label(
+                                                    RichText::new(format!(
+                                                        "Población: {} ({:.1}% del país)",
+                                                        format_exact_count(reg.population),
+                                                        pop_share
+                                                    ))
+                                                    .size(10.5)
+                                                    .color(TEXT_PRIMARY),
+                                                );
+                                                ui.label(
+                                                    RichText::new(format!(
+                                                        "Desempleados: {} ({:.1}% tasa | {:.1}% pob.)",
+                                                        format_exact_count(reg.unemployed),
+                                                        unemp_rate,
+                                                        unemp_pop_pct
+                                                    ))
+                                                    .size(10.5)
+                                                    .color(if reg.unemployed > 0 {
+                                                        ACCENT_GOLD
+                                                    } else {
+                                                        ACCENT_CRIMSON
+                                                    }),
+                                                );
+                                                ui.label(
+                                                    RichText::new(format!(
+                                                        "Cupo reclutable: {} soldados",
+                                                        format_exact_count(reg_cap)
+                                                    ))
+                                                    .size(10.0)
+                                                    .color(if reg_cap > 0 {
+                                                        ACCENT_EMERALD
+                                                    } else {
+                                                        ACCENT_CRIMSON
+                                                    }),
+                                                );
+                                            }
+
                                             if is_player {
                                                 ui.add_space(4.0);
                                                 ui.label(
@@ -396,38 +442,127 @@ pub fn render_map_screen(
                                                         .size(10.5)
                                                         .color(ACCENT_GOLD),
                                                 );
-                                                ui.horizontal(|ui| {
-                                                    ui.spacing_mut().item_spacing.x = 4.0;
-                                                    let btn_w =
-                                                        ((ui.available_width() - 8.0) / 3.0)
-                                                            .max(66.0);
-                                                    for (troops, cost_m, short_lbl) in [
-                                                        (1_000_u64, 70.0_f64, "+1K ($70M)"),
-                                                        (2_500_u64, 175.0_f64, "+2.5K ($175M)"),
-                                                        (5_000_u64, 350.0_f64, "+5K ($350M)"),
-                                                    ] {
-                                                        let can_pay =
-                                                            country.economy.treasury_usd_millions
-                                                                >= cost_m;
-                                                        if game_button(
+
+                                                let max_by_region = region_opt
+                                                    .as_ref()
+                                                    .map(|r| r.max_recruitable())
+                                                    .unwrap_or(0);
+                                                let max_by_treasury =
+                                                    ((country.economy.treasury_usd_millions / 70.0)
+                                                        * 1_000.0)
+                                                        .floor() as u64;
+                                                let effective_max =
+                                                    max_by_region.min(max_by_treasury);
+
+                                                if max_by_region == 0 {
+                                                    ui.label(
+                                                        RichText::new(
+                                                            "Región sin desempleados o sin cupo demográfico disponible.",
+                                                        )
+                                                        .size(10.0)
+                                                        .color(ACCENT_CRIMSON),
+                                                    );
+                                                } else if max_by_treasury == 0 {
+                                                    ui.label(
+                                                        RichText::new(
+                                                            "Tesorería insuficiente para reclutar.",
+                                                        )
+                                                        .size(10.0)
+                                                        .color(ACCENT_CRIMSON),
+                                                    );
+                                                } else {
+                                                    *recruit_troops_amount =
+                                                        (*recruit_troops_amount)
+                                                            .clamp(1, effective_max);
+                                                    ui.horizontal(|ui| {
+                                                        ui.add(
+                                                            egui::DragValue::new(
+                                                                recruit_troops_amount,
+                                                            )
+                                                            .range(1..=effective_max)
+                                                            .speed(50.0),
+                                                        );
+                                                        let slider_w =
+                                                            (ui.available_width() - 6.0).max(80.0);
+                                                        ui.add_sized(
+                                                            [slider_w, 20.0],
+                                                            egui::Slider::new(
+                                                                recruit_troops_amount,
+                                                                1..=effective_max,
+                                                            )
+                                                            .show_value(false),
+                                                        );
+                                                    });
+                                                    ui.horizontal(|ui| {
+                                                        ui.spacing_mut().item_spacing.x = 3.0;
+                                                        let bw = ((ui.available_width() - 12.0)
+                                                            / 5.0)
+                                                            .max(36.0);
+                                                        for (lbl, delta) in [
+                                                            ("-1K", -1_000_i64),
+                                                            ("-250", -250_i64),
+                                                            ("+250", 250_i64),
+                                                            ("+1K", 1_000_i64),
+                                                        ] {
+                                                            if step_button(
+                                                                ui,
+                                                                Vec2::new(bw, 22.0),
+                                                                lbl,
+                                                                None,
+                                                            )
+                                                            .clicked()
+                                                            {
+                                                                let next = ((*recruit_troops_amount
+                                                                    as i64)
+                                                                    + delta)
+                                                                    .clamp(1, effective_max as i64)
+                                                                    as u64;
+                                                                *recruit_troops_amount = next;
+                                                            }
+                                                        }
+                                                        if step_button(
                                                             ui,
-                                                            Vec2::new(btn_w, 26.0),
-                                                            short_lbl,
+                                                            Vec2::new(bw, 22.0),
+                                                            "Máx",
                                                             None,
-                                                            can_pay,
-                                                            Some(ACCENT_GOLD),
                                                         )
                                                         .clicked()
-                                                            && can_pay
                                                         {
-                                                            result.recruit_in_province = Some((
-                                                                prov_mesh.clone(),
-                                                                troops,
-                                                                cost_m,
-                                                            ));
+                                                            *recruit_troops_amount = effective_max;
                                                         }
+                                                    });
+
+                                                    let chosen = *recruit_troops_amount;
+                                                    let cost_m = (chosen as f64 / 1_000.0) * 70.0;
+                                                    let upkeep_m = (chosen as f64 / 1_000.0) * 1.35;
+                                                    ui.label(
+                                                        RichText::new(format!(
+                                                            "Costo: ${cost_m:.1}M | Mant.: -${upkeep_m:.2}M/mes"
+                                                        ))
+                                                        .size(9.5)
+                                                        .color(TEXT_MUTED),
+                                                    );
+                                                    let btn_lbl = format!(
+                                                        "Reclutar {} de desempleados",
+                                                        format_exact_count(chosen)
+                                                    );
+                                                    if game_button(
+                                                        ui,
+                                                        Vec2::new(ui.available_width(), 26.0),
+                                                        &btn_lbl,
+                                                        Some(GameIcon::Population),
+                                                        true,
+                                                        Some(ACCENT_GOLD),
+                                                    )
+                                                    .clicked()
+                                                    {
+                                                        result.recruit_in_province = Some((
+                                                            prov_mesh.clone(),
+                                                            chosen,
+                                                            cost_m,
+                                                        ));
                                                     }
-                                                });
+                                                }
                                             }
                                         },
                                     );

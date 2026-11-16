@@ -35,7 +35,7 @@ use crate::ui::screens::loading_screen::{
 };
 use crate::ui::screens::main_menu::{render_main_menu, MainMenuAction};
 use crate::ui::screens::map_screen::render_map_screen;
-use crate::ui::screens::military_screen::{render_military_screen, MilitaryScreenAction};
+use crate::ui::screens::military_screen::render_military_screen;
 use crate::ui::screens::politics_screen::render_politics_screen;
 use crate::ui::screens::settings_screen::{render_settings_screen, SettingsAction};
 use crate::ui::theme::apply_tactical_theme;
@@ -63,6 +63,7 @@ pub struct HorizonteLatamApp {
     pub selected_difficulty: Difficulty,
     pub show_country_popup: bool,
     pub show_minister_popup: bool,
+    pub recruit_troops_amount: u64,
     pub last_tick_instant: Instant,
     pub last_frame_instant: Instant,
     pub day_accumulator: f64,
@@ -178,6 +179,7 @@ impl HorizonteLatamApp {
             selected_province_mesh: None,
             selected_unit_id: None,
             countries: BTreeMap::new(),
+            regions: BTreeMap::new(),
             relations: BTreeMap::new(),
             units: Vec::new(),
             next_unit_id: 1,
@@ -214,6 +216,7 @@ impl HorizonteLatamApp {
             selected_difficulty: Difficulty::Normal,
             show_country_popup: false,
             show_minister_popup: false,
+            recruit_troops_amount: 1_000,
             last_tick_instant: now,
             last_frame_instant: now,
             day_accumulator: 0.0,
@@ -539,6 +542,7 @@ impl eframe::App for HorizonteLatamApp {
                         &mut self.map_mode,
                         &mut self.map_viewport,
                         &mut self.show_country_popup,
+                        &mut self.recruit_troops_amount,
                     );
                     next_hud_rects.extend(res.overlay_rects);
                     if let Some((unit_id, target_province)) = res.order_unit_move {
@@ -563,14 +567,22 @@ impl eframe::App for HorizonteLatamApp {
                     }
                 }
                 ScreenRoute::Economy => {
-                    if render_economy_screen(ui, &mut self.state) {
+                    let res = render_economy_screen(ui, &mut self.state);
+                    if let Some(act) = res.policy_action {
+                        self.dispatch_player_action(act);
+                    }
+                    if res.open_companies {
                         self.route = ScreenRoute::Companies;
                     }
                 }
                 ScreenRoute::Companies => {
                     render_companies_screen(ui, &self.state, &mut self.companies_view);
                 }
-                ScreenRoute::Politics => render_politics_screen(ui, &mut self.state),
+                ScreenRoute::Politics => {
+                    for act in render_politics_screen(ui, &mut self.state) {
+                        self.dispatch_player_action(act);
+                    }
+                }
                 ScreenRoute::Diplomacy => {
                     let res = render_diplomacy_screen(
                         ui,
@@ -582,15 +594,18 @@ impl eframe::App for HorizonteLatamApp {
                     }
                 }
                 ScreenRoute::Military => {
-                    match render_military_screen(ui, &mut self.state, &self.province_graph) {
-                        MilitaryScreenAction::None => {}
-                        MilitaryScreenAction::PlayerAction(act) => {
-                            self.dispatch_player_action(act);
-                        }
-                        MilitaryScreenAction::OpenMapForUnit(uid) => {
-                            self.state.selected_unit_id = Some(uid);
-                            self.route = ScreenRoute::WorldMap;
-                        }
+                    let res = render_military_screen(
+                        ui,
+                        &mut self.state,
+                        &self.province_graph,
+                        &mut self.recruit_troops_amount,
+                    );
+                    for act in res.actions {
+                        self.dispatch_player_action(act);
+                    }
+                    if let Some(uid) = res.open_map_for_unit {
+                        self.state.selected_unit_id = Some(uid);
+                        self.route = ScreenRoute::WorldMap;
                     }
                 }
                 ScreenRoute::Settings => {
@@ -688,8 +703,8 @@ impl eframe::App for HorizonteLatamApp {
                 if let Some(opt) = ev.options.get(opt_idx) {
                     if let Some(pid) = self.state.player_country_id.clone() {
                         if let Some(country) = self.state.countries.get_mut(&pid) {
-                            let treasury_delta =
-                                country.economy.gdp_usd_millions * opt.treasury_delta_pct;
+                            let monthly_gdp = (country.economy.gdp_usd_millions / 12.0).max(1.0);
+                            let treasury_delta = monthly_gdp * (opt.treasury_delta_pct * 4.0);
                             country.economy.treasury_usd_millions =
                                 (country.economy.treasury_usd_millions + treasury_delta).max(0.0);
                             country.economy.gdp_growth_pct += opt.gdp_growth_delta;
@@ -697,6 +712,7 @@ impl eframe::App for HorizonteLatamApp {
                                 (country.economy.inflation_pct + opt.inflation_delta).clamp(-0.4, 210.0);
                             country.stability =
                                 (country.stability + opt.stability_delta).clamp(12.0, 98.0);
+                            country.recompute_fiscal_snapshot();
                         }
                         self.state.push_chronicle(
                             pid,

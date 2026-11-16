@@ -5,30 +5,31 @@
 
 use crate::models::{ArmyUnit, GameState, PlayerAction, ProvinceGraph};
 use crate::ui::theme::{
-    card_frame, draw_country_shield, draw_gauge_bar, draw_section_header, game_button,
-    panel_frame, step_button, well_frame, GameIcon, ACCENT_CRIMSON, ACCENT_CYAN, ACCENT_EMERALD,
-    ACCENT_GOLD, BORDER_BRASS_DIM, TEXT_MUTED, TEXT_PRIMARY,
+    card_frame, draw_country_shield, draw_gauge_bar, draw_section_header, format_exact_count,
+    game_button, panel_frame, step_button, well_frame, GameIcon, ACCENT_CRIMSON, ACCENT_CYAN,
+    ACCENT_EMERALD, ACCENT_GOLD, BORDER_BRASS_DIM, TEXT_MUTED, TEXT_PRIMARY,
 };
 use egui::{RichText, Ui, Vec2};
 
-pub enum MilitaryScreenAction {
-    None,
-    PlayerAction(PlayerAction),
-    OpenMapForUnit(u64),
+pub struct MilitaryScreenResult {
+    pub actions: Vec<PlayerAction>,
+    pub open_map_for_unit: Option<u64>,
 }
 
 pub fn render_military_screen(
     ui: &mut Ui,
     state: &mut GameState,
     graph: &ProvinceGraph,
-) -> MilitaryScreenAction {
+    recruit_troops_amount: &mut u64,
+) -> MilitaryScreenResult {
+    let mut out = MilitaryScreenResult {
+        actions: Vec::new(),
+        open_map_for_unit: None,
+    };
     let Some(pid) = state.player_country_id.clone() else {
         ui.label("Selecciona un país primero.");
-        return MilitaryScreenAction::None;
+        return out;
     };
-
-    let mut out_action = MilitaryScreenAction::None;
-    let mut drills_msg: Option<String> = None;
 
     // Recolectar estados propios del jugador y estados accesibles (propios, aliados o en guerra)
     let mut own_provinces: Vec<(String, String)> = graph
@@ -87,9 +88,11 @@ pub fn render_military_screen(
         .selected_unit_id
         .and_then(|uid| player_units.iter().find(|u| u.id == uid).cloned());
 
+    let selected_region = state.regions.get(&recruit_prov_mesh).cloned();
+
     let neighbors: Vec<(String, String, u64, f64)> = {
         let Some(c) = state.countries.get(&pid) else {
-            return MilitaryScreenAction::None;
+            return out;
         };
         c.neighbors
             .iter()
@@ -107,8 +110,9 @@ pub fn render_military_screen(
     };
 
     let Some(country) = state.countries.get_mut(&pid) else {
-        return MilitaryScreenAction::None;
+        return out;
     };
+    let prev_defense_pct = country.military.defense_budget_pct;
     let shield_country = country.clone();
     let player_power = country.military_power_score().max(1.0);
     let max_power = neighbors
@@ -253,7 +257,7 @@ pub fn render_military_screen(
 
                         ui.add_space(6.0);
 
-                        // Selector de estado destino para reclutar soldados
+                        // Selector de estado destino y demografía regional para reclutamiento
                         card_frame(Some(BORDER_BRASS_DIM)).show(ui, |ui| {
                             ui.label(
                                 RichText::new("Estado de Reclutamiento:")
@@ -296,41 +300,162 @@ pub fn render_military_screen(
                                     next_selected_prov = Some(own_provinces[next].0.clone());
                                 }
                             });
+
+                            if let Some(reg) = selected_region.as_ref() {
+                                ui.add_space(4.0);
+                                let pop_share = reg.population_share_pct(country.population);
+                                let unemp_rate = reg.unemployment_rate_pct();
+                                let unemp_pop_pct = reg.unemployed_of_population_pct();
+                                let reg_cap = reg.max_recruitable();
+                                ui.label(
+                                    RichText::new(format!(
+                                        "Población regional: {} ({:.1}% del país)",
+                                        format_exact_count(reg.population),
+                                        pop_share
+                                    ))
+                                    .size(11.5)
+                                    .color(TEXT_PRIMARY),
+                                );
+                                ui.label(
+                                    RichText::new(format!(
+                                        "Desempleados: {} ({:.1}% tasa lab. | {:.1}% pob.)",
+                                        format_exact_count(reg.unemployed),
+                                        unemp_rate,
+                                        unemp_pop_pct
+                                    ))
+                                    .size(11.5)
+                                    .color(if reg.unemployed > 0 {
+                                        ACCENT_GOLD
+                                    } else {
+                                        ACCENT_CRIMSON
+                                    }),
+                                );
+                                ui.label(
+                                    RichText::new(format!(
+                                        "Cupo reclutable: {} soldados (reclutados aquí: {})",
+                                        format_exact_count(reg_cap),
+                                        format_exact_count(reg.stationed_recruited)
+                                    ))
+                                    .size(11.0)
+                                    .color(if reg_cap > 0 {
+                                        ACCENT_EMERALD
+                                    } else {
+                                        ACCENT_CRIMSON
+                                    }),
+                                );
+                            }
                         });
 
                         ui.add_space(6.0);
 
-                        for (troops, cost_m, upkeep_m) in [
-                            (1_000_u64, 70.0_f64, 1.35_f64),
-                            (2_500_u64, 175.0_f64, 3.38_f64),
-                            (5_000_u64, 350.0_f64, 6.75_f64),
-                        ] {
-                            let can_recruit = country.economy.treasury_usd_millions >= cost_m;
-                            let lbl = format!(
-                                "Reclutar {troops} (-${cost_m:.0}M | -{upkeep_m:.2}M/mes)"
+                        let max_by_region = selected_region
+                            .as_ref()
+                            .map(|r| r.max_recruitable())
+                            .unwrap_or(0);
+                        let max_by_treasury =
+                            ((country.economy.treasury_usd_millions / 70.0) * 1_000.0).floor()
+                                as u64;
+                        let effective_max = max_by_region.min(max_by_treasury);
+
+                        card_frame(Some(BORDER_BRASS_DIM)).show(ui, |ui| {
+                            ui.label(
+                                RichText::new(
+                                    "Cantidad libre de tropas (reclutadas desde desempleados):",
+                                )
+                                .strong()
+                                .size(11.5)
+                                .color(ACCENT_GOLD),
                             );
-                            if game_button(
-                                ui,
-                                Vec2::new(btn_w, 36.0),
-                                &lbl,
-                                Some(GameIcon::Population),
-                                can_recruit,
-                                Some(ACCENT_GOLD),
-                            )
-                            .clicked()
-                                && can_recruit
-                            {
-                                out_action = MilitaryScreenAction::PlayerAction(
-                                    PlayerAction::RecruitSoldiers {
+
+                            if max_by_region == 0 {
+                                ui.label(
+                                    RichText::new(
+                                        "Esta región tiene pocos desempleados o alcanzó su límite demográfico.",
+                                    )
+                                    .size(11.0)
+                                    .color(ACCENT_CRIMSON),
+                                );
+                            } else if max_by_treasury == 0 {
+                                ui.label(
+                                    RichText::new("Tesorería insuficiente para reclutar soldados.")
+                                        .size(11.0)
+                                        .color(ACCENT_CRIMSON),
+                                );
+                            } else {
+                                *recruit_troops_amount =
+                                    (*recruit_troops_amount).clamp(1, effective_max);
+                                ui.horizontal(|ui| {
+                                    ui.add(
+                                        egui::DragValue::new(recruit_troops_amount)
+                                            .range(1..=effective_max)
+                                            .speed(100.0),
+                                    );
+                                    let slider_w = (ui.available_width() - 8.0).max(90.0);
+                                    ui.add_sized(
+                                        [slider_w, 24.0],
+                                        egui::Slider::new(
+                                            recruit_troops_amount,
+                                            1..=effective_max,
+                                        )
+                                        .show_value(false),
+                                    );
+                                });
+                                ui.add_space(3.0);
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.spacing_mut().item_spacing.x = 4.0;
+                                    for (lbl, delta) in [
+                                        ("-5K", -5_000_i64),
+                                        ("-1K", -1_000_i64),
+                                        ("-250", -250_i64),
+                                        ("+250", 250_i64),
+                                        ("+1K", 1_000_i64),
+                                        ("+5K", 5_000_i64),
+                                    ] {
+                                        if step_button(ui, Vec2::new(42.0, 24.0), lbl, None)
+                                            .clicked()
+                                        {
+                                            let next = ((*recruit_troops_amount as i64) + delta)
+                                                .clamp(1, effective_max as i64)
+                                                as u64;
+                                            *recruit_troops_amount = next;
+                                        }
+                                    }
+                                    if step_button(ui, Vec2::new(46.0, 24.0), "Máx", None)
+                                        .clicked()
+                                    {
+                                        *recruit_troops_amount = effective_max;
+                                    }
+                                });
+
+                                ui.add_space(4.0);
+                                let chosen = *recruit_troops_amount;
+                                let cost_m = (chosen as f64 / 1_000.0) * 70.0;
+                                let upkeep_m = (chosen as f64 / 1_000.0) * 1.35;
+                                let btn_lbl = format!(
+                                    "Reclutar {} (-${cost_m:.1}M | -{upkeep_m:.2}M/mes)",
+                                    format_exact_count(chosen)
+                                );
+                                if game_button(
+                                    ui,
+                                    Vec2::new(btn_w.min(ui.available_width()), 36.0),
+                                    &btn_lbl,
+                                    Some(GameIcon::Population),
+                                    true,
+                                    Some(ACCENT_GOLD),
+                                )
+                                .clicked()
+                                {
+                                    out.actions.push(PlayerAction::RecruitSoldiers {
                                         country_id: pid.clone(),
                                         province_mesh: recruit_prov_mesh.clone(),
-                                        troops,
+                                        troops: chosen,
                                         cost_m,
-                                    },
-                                );
+                                    });
+                                }
                             }
-                            ui.add_space(4.0);
-                        }
+                        });
+
+                        ui.add_space(6.0);
 
                         let can_drills = country.economy.treasury_usd_millions >= 200.0;
                         if game_button(
@@ -344,11 +469,9 @@ pub fn render_military_screen(
                         .clicked()
                             && can_drills
                         {
-                            country.economy.treasury_usd_millions -= 200.0;
-                            country.military.readiness =
-                                (country.military.readiness + 6.0).min(100.0);
-                            drills_msg =
-                                Some("Maniobras militares completadas con éxito.".to_string());
+                            out.actions.push(PlayerAction::RunMilitaryDrills {
+                                country_id: pid.clone(),
+                            });
                         }
                     });
                 });
@@ -445,7 +568,7 @@ pub fn render_military_screen(
                             )
                             .clicked()
                             {
-                                out_action = MilitaryScreenAction::OpenMapForUnit(unit.id);
+                                out.open_map_for_unit = Some(unit.id);
                             }
 
                             ui.add_space(5.0);
@@ -479,12 +602,10 @@ pub fn render_military_screen(
                                         )
                                         .clicked()
                                         {
-                                            out_action = MilitaryScreenAction::PlayerAction(
-                                                PlayerAction::OrderUnitMove {
-                                                    unit_id: unit.id,
-                                                    target_province: dest_mesh.clone(),
-                                                },
-                                            );
+                                            out.actions.push(PlayerAction::OrderUnitMove {
+                                                unit_id: unit.id,
+                                                target_province: dest_mesh.clone(),
+                                            });
                                         }
                                         ui.add_space(2.0);
                                     }
@@ -550,13 +671,18 @@ pub fn render_military_screen(
             });
         });
 
+    if (country.military.defense_budget_pct - prev_defense_pct).abs() > 1e-6 {
+        country.recompute_fiscal_snapshot();
+        out.actions.push(PlayerAction::UpdateDefenseBudget {
+            country_id: pid,
+            defense_budget_pct: country.military.defense_budget_pct,
+        });
+    }
+
     state.selected_unit_id = selected_uid;
     if let Some(prov) = next_selected_prov {
         state.selected_province_mesh = Some(prov);
     }
-    if let Some(msg) = drills_msg {
-        state.push_chronicle(pid, msg);
-    }
 
-    out_action
+    out
 }

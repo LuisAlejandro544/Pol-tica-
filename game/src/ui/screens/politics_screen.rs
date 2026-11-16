@@ -4,7 +4,7 @@
 //! barra ideológica, tarjetas de partidos con medidor de aprobación, cuenta regresiva electoral
 //! y decretos ejecutivos en botones táctiles.
 
-use crate::models::{CountryState, GameState, PoliticalParty};
+use crate::models::{CountryState, GameState, PlayerAction, PoliticalDecreeKind, PoliticalParty};
 use crate::ui::theme::{
     card_frame, draw_country_shield, draw_gauge_bar, draw_section_header, game_button,
     ideology_color, panel_frame, well_frame, GameIcon, ACCENT_CRIMSON, ACCENT_CYAN, ACCENT_EMERALD,
@@ -14,17 +14,16 @@ use egui::{Align2, Color32, CornerRadius, FontId, Pos2, Rect, RichText, Sense, S
 
 const TOTAL_CONGRESS_CHAIRS: usize = 50;
 
-pub fn render_politics_screen(ui: &mut Ui, state: &mut GameState) {
+pub fn render_politics_screen(ui: &mut Ui, state: &mut GameState) -> Vec<PlayerAction> {
+    let mut actions = Vec::new();
     let Some(pid) = state.player_country_id.clone() else {
         ui.label("Selecciona un país primero.");
-        return;
+        return actions;
     };
-
-    let mut decree_msg: Option<String> = None;
 
     {
         let Some(country) = state.countries.get_mut(&pid) else {
-            return;
+            return actions;
         };
         let shield_country = country.clone();
 
@@ -388,28 +387,11 @@ pub fn render_politics_screen(ui: &mut Ui, state: &mut GameState) {
                                         ui.add_space(5.0);
                                     }
 
-                                    if let Some((acronym, leader_name, join)) = coalition_action {
-                                        if join {
-                                            if !country.coalition_parties.iter().any(|a| a == &acronym) {
-                                                country.coalition_parties.push(acronym.clone());
-                                            }
-                                            country.political_capital =
-                                                (country.political_capital - 20.0).max(0.0);
-                                            country.stability =
-                                                (country.stability + 2.5).min(98.0);
-                                            decree_msg = Some(format!(
-                                                "Coalición legislativa firmada con [{acronym}] (líder {leader_name})."
-                                            ));
-                                        } else {
-                                            country.coalition_parties.retain(|a| a != &acronym);
-                                            country.stability =
-                                                (country.stability - 2.0).max(12.0);
-                                            decree_msg = Some(format!(
-                                                "[{acronym}] abandonó la coalición en el Congreso."
-                                            ));
-                                        }
-                                        country.legislative_support_pct =
-                                            country.compute_legislative_support_pct();
+                                    if let Some((acronym, _leader_name, _join)) = coalition_action {
+                                        actions.push(PlayerAction::ToggleCoalitionParty {
+                                            country_id: pid.clone(),
+                                            party_acronym: acronym,
+                                        });
                                     }
                                 });
                         });
@@ -448,12 +430,10 @@ pub fn render_politics_screen(ui: &mut Ui, state: &mut GameState) {
                             .clicked()
                                 && can_dialogue
                             {
-                                country.economy.treasury_usd_millions -= 250.0;
-                                country.stability = (country.stability + 5.0).min(100.0);
-                                decree_msg = Some(
-                                    "Se celebró una mesa de diálogo nacional en el Congreso."
-                                        .to_string(),
-                                );
+                                actions.push(PlayerAction::ExecutePoliticalDecree {
+                                    country_id: pid.clone(),
+                                    decree: PoliticalDecreeKind::NationalDialogue,
+                                });
                             }
 
                             ui.add_space(7.0);
@@ -470,16 +450,10 @@ pub fn render_politics_screen(ui: &mut Ui, state: &mut GameState) {
                             .clicked()
                                 && can_campaign
                             {
-                                country.economy.treasury_usd_millions -= 180.0;
-                                if let Some(ruling) =
-                                    country.political_parties.iter_mut().find(|p| p.is_ruling)
-                                {
-                                    ruling.approval_pct = (ruling.approval_pct + 4.0).min(95.0);
-                                }
-                                decree_msg = Some(
-                                    "El partido de gobierno impulsó una campaña ciudadana."
-                                        .to_string(),
-                                );
+                                actions.push(PlayerAction::ExecutePoliticalDecree {
+                                    country_id: pid.clone(),
+                                    decree: PoliticalDecreeKind::PublicCampaign,
+                                });
                             }
                         });
                     });
@@ -487,9 +461,7 @@ pub fn render_politics_screen(ui: &mut Ui, state: &mut GameState) {
             });
     }
 
-    if let Some(msg) = decree_msg {
-        state.push_chronicle(pid, msg);
-    }
+    actions
 }
 
 /// Reparte exactamente `total_chairs` sillas proporcionalmente entre los partidos usando resto mayor.

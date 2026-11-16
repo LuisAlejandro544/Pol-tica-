@@ -3,7 +3,7 @@
 //! Combina libros contables nacionales, medidores de inflación y deuda, y palancas de
 //! política fiscal/monetaria con botones táctiles `[-]` / `[+]` además de deslizadores.
 
-use crate::models::GameState;
+use crate::models::{GameState, PlayerAction};
 use crate::ui::theme::{
     card_frame, draw_country_shield, draw_gauge_bar, draw_section_header, format_usd_millions,
     game_button, panel_frame, step_button, well_frame, GameIcon, ACCENT_CRIMSON, ACCENT_CYAN,
@@ -11,11 +11,19 @@ use crate::ui::theme::{
 };
 use egui::{RichText, Ui, Vec2};
 
-pub fn render_economy_screen(ui: &mut Ui, state: &mut GameState) -> bool {
-    let mut open_companies = false;
+pub struct EconomyScreenResult {
+    pub open_companies: bool,
+    pub policy_action: Option<PlayerAction>,
+}
+
+pub fn render_economy_screen(ui: &mut Ui, state: &mut GameState) -> EconomyScreenResult {
+    let mut out = EconomyScreenResult {
+        open_companies: false,
+        policy_action: None,
+    };
     let Some(pid) = state.player_country_id.clone() else {
         ui.label("Selecciona un país primero.");
-        return false;
+        return out;
     };
     let corp_count = state.companies.iter().filter(|c| c.country_id == pid).count();
     let corp_jobs = state.country_company_jobs(&pid);
@@ -24,8 +32,13 @@ pub fn render_economy_screen(ui: &mut Ui, state: &mut GameState) -> bool {
     let global_cycle = state.global_cycle.clone();
 
     let Some(country) = state.countries.get_mut(&pid) else {
-        return false;
+        return out;
     };
+
+    let prev_interest = country.economy.interest_rate_pct;
+    let prev_tax = country.economy.tax_rate_pct;
+    let prev_infra = country.economy.infra_investment_pct;
+    let prev_social = country.economy.social_investment_pct;
 
     let shield_country = country.clone();
 
@@ -150,14 +163,75 @@ pub fn render_economy_screen(ui: &mut Ui, state: &mut GameState) -> bool {
                                     ACCENT_CRIMSON
                                 }),
                             );
-                            ui.label(format!(
-                                "Reservas / Tesorería: {}",
-                                format_usd_millions(country.economy.treasury_usd_millions)
-                            ));
                             ui.label(
                                 RichText::new(format!(
-                                    "Balance Fiscal: {:+.1} M/mes  |  Balanza Com.: {:+.1} M/mes",
+                                    "Reservas / Tesorería: {}",
+                                    format_usd_millions(country.economy.treasury_usd_millions)
+                                ))
+                                .strong()
+                                .color(ACCENT_GOLD),
+                            );
+                        });
+                        ui.add_space(5.0);
+
+                        // Libro Fiscal Mensual Desglosado: Ingresos Fiscales vs Gastos
+                        let gross_rev = country.economy.monthly_tax_revenue_m;
+                        let corp_tax = country.economy.corporate_tax_revenue_m;
+                        let nat_tax = (gross_rev - corp_tax).max(0.0);
+                        let def_cost = country.economy.monthly_defense_cost_m;
+                        let upkeep = country.economy.troop_upkeep_usd_millions;
+                        let infra_cost = country.economy.monthly_infra_cost_m;
+                        let social_cost = country.economy.monthly_social_cost_m;
+                        let debt_cost = country.economy.monthly_debt_service_m;
+                        let total_exp = def_cost + upkeep + infra_cost + social_cost + debt_cost;
+                        let daily_net = country.economy.last_monthly_balance / 30.0;
+
+                        card_frame(Some(BORDER_BRASS_DIM)).show(ui, |ui| {
+                            ui.label(
+                                RichText::new("PRESUPUESTO FISCAL MENSUAL")
+                                    .strong()
+                                    .size(11.5)
+                                    .color(ACCENT_GOLD),
+                            );
+                            ui.label(
+                                RichText::new(format!(
+                                    "Ingresos Fiscales: +${:.2} M/mes (Nac. +${:.1}M | Emp. +${:.1}M)",
+                                    gross_rev, nat_tax, corp_tax
+                                ))
+                                .strong()
+                                .size(11.5)
+                                .color(ACCENT_EMERALD),
+                            );
+                            ui.label(
+                                RichText::new(format!(
+                                    "Gastos Totales: -${:.2} M/mes",
+                                    total_exp
+                                ))
+                                .strong()
+                                .size(11.5)
+                                .color(ACCENT_CRIMSON),
+                            );
+                            ui.label(
+                                RichText::new(format!(
+                                    "  • Defensa: -${:.1}M  |  Tropas: -${:.1}M  |  Deuda: -${:.1}M",
+                                    def_cost, upkeep, debt_cost
+                                ))
+                                .size(10.5)
+                                .color(TEXT_MUTED),
+                            );
+                            ui.label(
+                                RichText::new(format!(
+                                    "  • Infraestructura: -${:.1}M  |  Social: -${:.1}M",
+                                    infra_cost, social_cost
+                                ))
+                                .size(10.5)
+                                .color(TEXT_MUTED),
+                            );
+                            ui.label(
+                                RichText::new(format!(
+                                    "Balance Neto: {:+.2} M/mes ({:+.2} M/día)  |  Balanza Com.: {:+.1} M/mes",
                                     country.economy.last_monthly_balance,
+                                    daily_net,
                                     country.economy.trade_balance_usd_millions
                                 ))
                                 .strong()
@@ -170,22 +244,13 @@ pub fn render_economy_screen(ui: &mut Ui, state: &mut GameState) -> bool {
                             );
                             ui.label(
                                 RichText::new(format!(
-                                    "Mantenimiento Militar: -${:.2} M USD/mes",
-                                    country.economy.troop_upkeep_usd_millions
-                                ))
-                                .size(11.5)
-                                .color(ACCENT_CRIMSON),
-                            );
-                            ui.label(
-                                RichText::new(format!(
-                                    "Sector Privado: {} emp. ({} puestos | +{} PIB | +{} Exp/año | Imp. +${:.1}M/mes)",
+                                    "Sector Privado: {} emp. ({} puestos | +{} PIB | +{} Exp/año)",
                                     corp_count,
                                     corp_jobs,
                                     format_usd_millions(corp_gdp),
                                     format_usd_millions(corp_exports),
-                                    country.economy.corporate_tax_revenue_m
                                 ))
-                                .size(11.0)
+                                .size(10.5)
                                 .color(ACCENT_CYAN),
                             );
                         });
@@ -236,7 +301,7 @@ pub fn render_economy_screen(ui: &mut Ui, state: &mut GameState) -> bool {
                         )
                         .clicked()
                         {
-                            open_companies = true;
+                            out.open_companies = true;
                         }
                     });
                 });
@@ -305,7 +370,23 @@ pub fn render_economy_screen(ui: &mut Ui, state: &mut GameState) -> bool {
             });
         });
 
-    open_companies
+    let changed = (country.economy.interest_rate_pct - prev_interest).abs() > 1e-6
+        || (country.economy.tax_rate_pct - prev_tax).abs() > 1e-6
+        || (country.economy.infra_investment_pct - prev_infra).abs() > 1e-6
+        || (country.economy.social_investment_pct - prev_social).abs() > 1e-6;
+
+    if changed {
+        country.recompute_fiscal_snapshot();
+        out.policy_action = Some(PlayerAction::UpdateEconomicPolicy {
+            country_id: pid,
+            interest_rate_pct: country.economy.interest_rate_pct,
+            tax_rate_pct: country.economy.tax_rate_pct,
+            infra_investment_pct: country.economy.infra_investment_pct,
+            social_investment_pct: country.economy.social_investment_pct,
+        });
+    }
+
+    out
 }
 
 #[allow(clippy::too_many_arguments)]
