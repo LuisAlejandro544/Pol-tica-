@@ -16,7 +16,7 @@ Descripción exacta de carpetas y responsabilidades de cada módulo en el reposi
 │   ├── index.css                     # Estilos base Tailwind del host web
 │   └── main.tsx                      # Arranque React
 ├── game/                             # Proyecto real del juego móvil (Rust + Lua 5.4 + Android)
-│   ├── Cargo.toml                    # Dependencias Rust (MIT/Apache-2.0): egui, wgpu, gltf, mlua (Lua 5.4), rayon
+│   ├── Cargo.toml                    # Dependencias Rust (MIT/Apache-2.0): egui, wgpu, gltf, mlua (Lua 5.4), rayon, postcard, lz4_flex
 │   ├── rust-toolchain.toml           # Toolchain Rust estable + targets Android (arm64-v8a, armeabi-v7a, x86_64)
 │   ├── .cargo/config.toml            # Flags de enlazado NDK (16KB page size en 64-bit, NEON en 32-bit)
 │   ├── android/                      # Empaquetado APK puro sin Kotlin (NativeActivity)
@@ -40,19 +40,22 @@ Descripción exacta de carpetas y responsabilidades de cada módulo en el reposi
 │   │       ├── build_latam_map.py    # Script Blender (bpy/bmesh) que convierte GeoJSON a .glb + .lua
 │   │       └── sync_lua_metadata.lua # Script Lua 5.4 para exportar países a JSON y validar provincias
 │   ├── tests/
-│   │   └── verify_assets.test.ts     # Pruebas automatizadas (node:test) de integridad de SVG, Lua, tiempo real y UI
+│   │   └── verify_assets.test.ts     # Pruebas automatizadas (node:test) de integridad de SVG, Lua, caché, líderes y UI
 │   └── src/
-│       ├── lib.rs                    # Entrada android_main(AndroidApp) y run_desktop()
+│       ├── lib.rs                    # Entrada android_main(AndroidApp) (con cacheDir + PIPELINE_CACHE) y run_desktop()
 │       ├── main.rs                   # Binario de escritorio
-│       ├── models/mod.rs             # Structs y enums (CountryState, ArmyUnit, CompanyEntity, ProvinceNode, GameState)
+│       ├── models/mod.rs             # Structs y enums (CountryState, LeaderProfile, ArmyUnit, CompanyEntity, ProvinceNode, GameState)
+│       ├── cache/mod.rs              # Caché nativa (mapa 3D/grafo, shaders wgpu, bytecode Lua 5.4, crónica/gráficas/miniaturas)
 │       ├── map/
 │       │   ├── mod.rs
 │       │   ├── glb_loader.rs         # Lector glTF/GLB + raycasting 3D + grafo provincial (`build_province_graph`)
-│       │   ├── renderer_3d.rs        # Renderizador 3D `wgpu` + `egui-wgpu` en un solo draw call con iluminación
+│       │   ├── renderer_3d.rs        # Renderizador 3D `wgpu` + `egui-wgpu` con `PipelineCache` persistente
 │       │   └── svg_loader.rs         # Incrustación `assets` (`include_dir!`) y lector SVG
-│       ├── lua_bridge/mod.rs         # VM Lua 5.4 (mlua) para datos, empresas, economía mensual y eventos
-│       ├── ai/mod.rs                 # IA local paralela (rayon) con reclutamiento, rutas entre estados y diplomacia
-│       ├── engine/mod.rs             # Simulación continua en tiempo real (días, marcha de tropas, bolsa y empresas)
+│       ├── lua_bridge/mod.rs         # VM Lua 5.4 (mlua) con carga/guardado de bytecode precompilado
+│       ├── ai/mod.rs                 # IA local paralela (rayon) con reclutamiento, rutas entre estados, elecciones y diplomacia
+│       ├── engine/
+│       │   ├── mod.rs                # Simulación continua en tiempo real (días, tropas, bolsa, empresas y volcado a caché)
+│       │   └── leaders.rs            # Generador aleatorio de Presidente y líderes de oposición (nombre, edad, nacionalidad)
 │       └── ui/
 │           ├── mod.rs                # Router multipantalla (HorizonteLatamApp) y acumulador de tiempo real
 │           ├── theme.rs              # Paleta táctica, marcos flotantes con sombra, íconos vectoriales y biseles
@@ -62,10 +65,11 @@ Descripción exacta de carpetas y responsabilidades de cada módulo en el reposi
 │           └── screens/
 │               ├── main_menu.rs
 │               ├── country_select.rs
-│               ├── map_screen.rs     # Visor 3D 100% pantalla completa + overlays tácticos y crónica plegable
+│               ├── loading_screen.rs # Pantalla de carga que configura unidades iniciales y empresas aleatorias al elegir país
+│               ├── map_screen.rs     # Visor 3D 100% pantalla completa + reclutamiento directo en región propia y crónica plegable
 │               ├── economy_screen.rs
-│               ├── companies_screen.rs # Bolsa regional, empresas fundadas, productos, empleos y gráficas
-│               ├── politics_screen.rs
+│               ├── companies_screen.rs # Bolsa regional, empresas dinámicas, productos, empleos y gráficas
+│               ├── politics_screen.rs  # Mesa circular del Congreso con sillas pintadas por partido, tarjetas y decretos
 │               ├── diplomacy_screen.rs
 │               ├── military_screen.rs
 │               └── settings_screen.rs

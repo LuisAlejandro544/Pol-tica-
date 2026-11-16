@@ -177,6 +177,16 @@ pub fn render_diplomacy_screen(ui: &mut Ui, state: &mut GameState) {
                                     .size(11.5)
                                     .color(TEXT_MUTED),
                                 );
+                                if let Some(pres) = target.president() {
+                                    ui.label(
+                                        RichText::new(format!(
+                                            "Presidente: {} ({} años, {})",
+                                            pres.full_name, pres.age, pres.nationality
+                                        ))
+                                        .size(11.5)
+                                        .color(ACCENT_CYAN),
+                                    );
+                                }
                             });
                         });
                         ui.add_space(6.0);
@@ -205,6 +215,24 @@ pub fn render_diplomacy_screen(ui: &mut Ui, state: &mut GameState) {
                                 .size(12.0)
                                 .color(TEXT_PRIMARY),
                             );
+                            let opp = target.opposition_leaders();
+                            if !opp.is_empty() {
+                                let opp_line = opp
+                                    .iter()
+                                    .map(|(p, l)| {
+                                        format!(
+                                            "[{}] {} ({} años, {})",
+                                            p.acronym, l.full_name, l.age, l.nationality
+                                        )
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join("  •  ");
+                                ui.label(
+                                    RichText::new(format!("Oposición: {opp_line}"))
+                                        .size(10.5)
+                                        .color(TEXT_MUTED),
+                                );
+                            }
                         });
                         ui.add_space(6.0);
 

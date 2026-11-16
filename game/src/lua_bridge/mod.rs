@@ -8,10 +8,12 @@
 use crate::map::svg_loader::ASSETS_DIR;
 use crate::models::{
     AiPersonality, CapitalMarkerData, CompanyCategory, CompanyCategoryTemplate, CountryState,
-    EconomyState, EventOption, GameEvent, MilitaryState, PoliticalParty, ProvinceData,
+    EconomyState, EventOption, GameEvent, LeaderProfile, MilitaryState, PoliticalParty,
+    ProvinceData,
 };
-use mlua::{Function, Lua, Table};
+use mlua::{ChunkMode, Function, Lua, Table};
 use std::collections::BTreeMap;
+use std::sync::OnceLock;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -24,13 +26,17 @@ pub enum LuaBridgeError {
 
 pub struct LuaEngine {
     lua: Lua,
+    rules_bytecode: OnceLock<Vec<u8>>,
 }
 
 impl LuaEngine {
     /// Inicializa Lua 5.4 en modo seguro sin acceso peligroso al sistema de archivos externo.
     pub fn new() -> Result<Self, LuaBridgeError> {
         let lua = Lua::new();
-        Ok(Self { lua })
+        Ok(Self {
+            lua,
+            rules_bytecode: OnceLock::new(),
+        })
     }
 
     fn read_script(path: &str) -> Result<&'static str, LuaBridgeError> {
@@ -54,10 +60,64 @@ impl LuaEngine {
         None
     }
 
-    /// Carga los 21 países latinoamericanos definidos en `scripts/countries_latam.lua`.
+    /// Lee los bytes crudos de `scripts/provinces_latam.lua` para calcular la huella de caché del mapa.
+    pub fn read_provinces_lua_bytes() -> Vec<u8> {
+        Self::read_optional_script_owned(
+            "scripts/provinces_latam.lua",
+            &[
+                "scripts/provinces_latam.lua",
+                "../scripts/provinces_latam.lua",
+                "game/assets/scripts/provinces_latam.lua",
+            ],
+        )
+        .map(String::into_bytes)
+        .unwrap_or_default()
+    }
+
+    fn load_or_compile_bytecode(&self, cache_name: &str, src: &str) -> Result<Vec<u8>, LuaBridgeError> {
+        let fingerprint = crate::cache::compute_lua_fingerprint(cache_name, src);
+        if let Some(cached) = crate::cache::load_lua_bytecode(cache_name, fingerprint) {
+            if self
+                .lua
+                .load(&cached)
+                .set_mode(ChunkMode::Binary)
+                .into_function()
+                .is_ok()
+            {
+                return Ok(cached);
+            }
+        }
+
+        let func = self.lua.load(src).into_function()?;
+        let bytecode = func.dump(true);
+        crate::cache::save_lua_bytecode(cache_name, fingerprint, &bytecode);
+        Ok(bytecode)
+    }
+
+    fn eval_cached_table(&self, cache_name: &str, src: &str) -> Result<Table, LuaBridgeError> {
+        let bytecode = self.load_or_compile_bytecode(cache_name, src)?;
+        match self
+            .lua
+            .load(&bytecode)
+            .set_mode(ChunkMode::Binary)
+            .eval::<Table>()
+        {
+            Ok(tbl) => Ok(tbl),
+            Err(_) => {
+                // Respaldo: recompila si el binario en disco quedara corrupto
+                let func = self.lua.load(src).into_function()?;
+                let fresh = func.dump(true);
+                let fp = crate::cache::compute_lua_fingerprint(cache_name, src);
+                crate::cache::save_lua_bytecode(cache_name, fp, &fresh);
+                Ok(func.call(())?)
+            }
+        }
+    }
+
+    /// Carga los 21 países latinoamericanos definidos en `scripts/countries_latam.lua` usando caché de bytecode.
     pub fn load_initial_countries(&self) -> Result<BTreeMap<String, CountryState>, LuaBridgeError> {
         let src = Self::read_script("scripts/countries_latam.lua")?;
-        let table: Table = self.lua.load(src).eval()?;
+        let table = self.eval_cached_table("countries_latam", src)?;
         let mut countries = BTreeMap::new();
 
         for (idx, pair) in table.sequence_values::<Table>().enumerate() {
@@ -81,6 +141,7 @@ impl LuaEngine {
                     seats_pct: pt.get("seats_pct")?,
                     approval_pct: pt.get("approval_pct")?,
                     is_ruling: pt.get("is_ruling")?,
+                    leader: LeaderProfile::default(),
                 });
             }
 
@@ -205,7 +266,7 @@ impl LuaEngine {
             return Ok((BTreeMap::new(), Vec::new()));
         };
 
-        let root: Table = self.lua.load(&src).eval()?;
+        let root = self.eval_cached_table("provinces_latam", &src)?;
         let mut provinces = BTreeMap::new();
         if let Ok(prov_tbl) = root.get::<Table>("provinces") {
             for item in prov_tbl.sequence_values::<Table>() {
@@ -244,15 +305,28 @@ impl LuaEngine {
         Ok((provinces, capitals))
     }
 
-    /// Ejecuta un paso económico y político mensual para un país usando `scripts/game_rules.lua`.
+    /// Ejecuta un paso económico y político mensual para un país usando `scripts/game_rules.lua` precompilado.
     pub fn step_country_via_lua(
         &self,
         country: &mut CountryState,
         corporate_gdp_bonus_m: f64,
         corporate_jobs_total: u64,
     ) -> Result<(), LuaBridgeError> {
-        let rules_src = Self::read_script("scripts/game_rules.lua")?;
-        let rules_tbl: Table = self.lua.load(rules_src).eval()?;
+        let rules_bytecode = if let Some(bc) = self.rules_bytecode.get() {
+            bc
+        } else {
+            let rules_src = Self::read_script("scripts/game_rules.lua")?;
+            let compiled = self.load_or_compile_bytecode("game_rules", rules_src)?;
+            let _ = self.rules_bytecode.set(compiled);
+            self.rules_bytecode
+                .get()
+                .expect("rules_bytecode inicializado")
+        };
+        let rules_tbl: Table = self
+            .lua
+            .load(rules_bytecode.as_slice())
+            .set_mode(ChunkMode::Binary)
+            .eval()?;
 
         // 1. Cálculo macroeconómico en Lua 5.4 (incluye mantenimiento militar, empresas y desempleo)
         let econ_fn: Function = rules_tbl.get("calculate_monthly_economy")?;

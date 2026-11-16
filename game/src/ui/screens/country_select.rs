@@ -350,6 +350,21 @@ pub fn render_country_select(
                                                 .size(11.0)
                                                 .color(TEXT_MUTED),
                                             );
+                                            let role_lbl = if party.is_ruling {
+                                                "Presidente"
+                                            } else {
+                                                "Líder"
+                                            };
+                                            ui.label(
+                                                RichText::new(format!(
+                                                    "{role_lbl}: {} ({} años, {})",
+                                                    party.leader.full_name,
+                                                    party.leader.age,
+                                                    party.leader.nationality
+                                                ))
+                                                .size(10.5)
+                                                .color(ACCENT_CYAN),
+                                            );
                                         });
                                         ui.add_space(3.0);
                                     }

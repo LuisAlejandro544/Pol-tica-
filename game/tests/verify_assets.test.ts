@@ -89,6 +89,7 @@ test('Correcciones Rust: AI MilitaryState, U16 GLB colors, Window max_width, Str
     'game/src/ui/screens/companies_screen.rs',
     'game/src/ui/screens/diplomacy_screen.rs',
     'game/src/ui/screens/economy_screen.rs',
+    'game/src/ui/screens/loading_screen.rs',
     'game/src/ui/screens/main_menu.rs',
     'game/src/ui/screens/map_screen.rs',
     'game/src/ui/screens/military_screen.rs',
@@ -210,6 +211,7 @@ test('UI móvil: scroll táctil habilitado, sin colisiones de ScrollArea ID y co
     'game/src/ui/screens/companies_screen.rs',
     'game/src/ui/screens/map_screen.rs',
     'game/src/ui/screens/economy_screen.rs',
+    'game/src/ui/screens/loading_screen.rs',
     'game/src/ui/screens/politics_screen.rs',
     'game/src/ui/screens/diplomacy_screen.rs',
     'game/src/ui/screens/military_screen.rs',
@@ -391,3 +393,123 @@ test('Mapa 3D a pantalla completa con HUD flotante translúcido y fichas militar
   assert.ok(mapCanvasRs.includes('placed_badges'), 'map_canvas.rs debe evitar el solapamiento entre fichas de ejército');
   assert.ok(mapCanvasRs.includes('pointer_on_hud'), 'map_canvas.rs debe ignorar toques que caigan sobre HUD flotante');
 });
+
+test('Pantalla de carga de campaña, empresas no estáticas, reclutamiento directo regional y mesa circular del Congreso', () => {
+  const modelsRs = fs.readFileSync(path.resolve('game/src/models/mod.rs'), 'utf8');
+  const engineRs = fs.readFileSync(path.resolve('game/src/engine/mod.rs'), 'utf8');
+  const uiModRs = fs.readFileSync(path.resolve('game/src/ui/mod.rs'), 'utf8');
+  const loadingRs = fs.readFileSync(path.resolve('game/src/ui/screens/loading_screen.rs'), 'utf8');
+  const mapScreenRs = fs.readFileSync(path.resolve('game/src/ui/screens/map_screen.rs'), 'utf8');
+  const politicsRs = fs.readFileSync(path.resolve('game/src/ui/screens/politics_screen.rs'), 'utf8');
+
+  // 1. Pantalla de carga al seleccionar país + configuración dinámica
+  assert.ok(modelsRs.includes('CampaignLoading'), 'ScreenRoute debe incluir CampaignLoading');
+  assert.ok(modelsRs.includes('campaign_seed: u64'), 'GameState debe almacenar campaign_seed');
+  assert.ok(loadingRs.startsWith('//! Propósito del archivo:'), 'loading_screen.rs debe tener encabezado explicativo');
+  assert.ok(engineRs.includes('ConfigureCampaign'), 'SimulationWorker debe soportar ConfigureCampaign');
+  assert.ok(engineRs.includes('CampaignLoadProgress'), 'SimulationWorker debe emitir CampaignLoadProgress');
+  assert.ok(engineRs.includes('CampaignConfigured'), 'SimulationWorker debe emitir CampaignConfigured');
+  assert.ok(engineRs.includes('setup_initial_units'), 'engine/mod.rs debe configurar soldados y unidades predeterminadas en carga');
+  assert.ok(engineRs.includes('seed_dynamic_initial_companies'), 'engine/mod.rs debe formar empresas aleatorias en carga');
+  assert.equal(engineRs.includes('seed_countries = ["MX", "BR", "CO", "CL"]'), false, 'Las empresas iniciales no deben generarse con lista fija estática');
+  assert.ok(engineRs.includes('state.total_days % 5 != 0'), 'step_companies_and_stocks debe evaluar nuevas empresas cada 5 días con campaign_seed');
+  assert.ok(uiModRs.includes('ScreenRoute::CampaignLoading'), 'ui/mod.rs debe enrutar CampaignLoading');
+
+  // 2. Reclutamiento directo al seleccionar una región propia en el mapa
+  assert.ok(mapScreenRs.includes('recruit_in_province'), 'map_screen.rs debe exponer recruit_in_province');
+  assert.ok(mapScreenRs.includes('Reclutar tropas aquí:'), 'map_screen.rs debe permitir reclutar directamente en la región seleccionada');
+  assert.ok(uiModRs.includes('res.recruit_in_province'), 'ui/mod.rs debe despachar PlayerAction::RecruitSoldiers desde el mapa');
+
+  // 3. Mesa circular del Congreso con sillas pintadas por partido
+  assert.ok(politicsRs.includes('draw_congress_round_table'), 'politics_screen.rs debe dibujar la mesa circular del Congreso');
+  assert.ok(politicsRs.includes('allocate_parliament_chairs'), 'politics_screen.rs debe repartir las sillas por partido');
+  assert.ok(politicsRs.includes('TOTAL_CONGRESS_CHAIRS'), 'politics_screen.rs debe definir cantidad de sillas de la mesa circular');
+});
+
+test('Caché nativa (Mapa 3D/Grafo, Shaders wgpu, Bytecode Lua 5.4, Buffer histórico) y líderes políticos aleatorios (Jugador + IA)', () => {
+  const cargo = fs.readFileSync(path.resolve('game/Cargo.toml'), 'utf8');
+  const libRs = fs.readFileSync(path.resolve('game/src/lib.rs'), 'utf8');
+  const cacheRs = fs.readFileSync(path.resolve('game/src/cache/mod.rs'), 'utf8');
+  const leadersRs = fs.readFileSync(path.resolve('game/src/engine/leaders.rs'), 'utf8');
+  const renderer3d = fs.readFileSync(path.resolve('game/src/map/renderer_3d.rs'), 'utf8');
+  const luaBridge = fs.readFileSync(path.resolve('game/src/lua_bridge/mod.rs'), 'utf8');
+  const modelsRs = fs.readFileSync(path.resolve('game/src/models/mod.rs'), 'utf8');
+  const engineRs = fs.readFileSync(path.resolve('game/src/engine/mod.rs'), 'utf8');
+  const aiRs = fs.readFileSync(path.resolve('game/src/ai/mod.rs'), 'utf8');
+  const uiMod = fs.readFileSync(path.resolve('game/src/ui/mod.rs'), 'utf8');
+  const politicsRs = fs.readFileSync(path.resolve('game/src/ui/screens/politics_screen.rs'), 'utf8');
+  const diplomacyRs = fs.readFileSync(path.resolve('game/src/ui/screens/diplomacy_screen.rs'), 'utf8');
+  const countrySelectRs = fs.readFileSync(path.resolve('game/src/ui/screens/country_select.rs'), 'utf8');
+  const mapScreenRs = fs.readFileSync(path.resolve('game/src/ui/screens/map_screen.rs'), 'utf8');
+  const settingsRs = fs.readFileSync(path.resolve('game/src/ui/screens/settings_screen.rs'), 'utf8');
+
+  // Dependencias permisivas para caché binaria comprimida
+  assert.ok(cargo.includes('postcard ='), 'Cargo.toml debe incluir postcard');
+  assert.ok(cargo.includes('lz4_flex ='), 'Cargo.toml debe incluir lz4_flex');
+
+  // Encabezados obligatorios y balanceo de llaves/paréntesis en módulos nuevos
+  for (const [label, src] of [
+    ['game/src/cache/mod.rs', cacheRs],
+    ['game/src/engine/leaders.rs', leadersRs],
+    ['game/src/engine/mod.rs', engineRs],
+    ['game/src/lua_bridge/mod.rs', luaBridge],
+    ['game/src/models/mod.rs', modelsRs],
+    ['game/src/ai/mod.rs', aiRs],
+  ] as const) {
+    assert.ok(src.startsWith('//! Propósito del archivo:'), `${label} debe empezar con comentario explicativo`);
+    let braces = 0;
+    let parens = 0;
+    for (const ch of src) {
+      if (ch === '{') braces++;
+      else if (ch === '}') braces--;
+      else if (ch === '(') parens++;
+      else if (ch === ')') parens--;
+    }
+    assert.equal(braces, 0, `Llaves desbalanceadas en ${label}`);
+    assert.equal(parens, 0, `Paréntesis desbalanceados en ${label}`);
+  }
+
+  // 1. Android cacheDir + Pre-cocinado binario 3D y ProvinceGraph
+  assert.ok(libRs.includes('pub mod cache;'), 'lib.rs debe declarar pub mod cache');
+  assert.ok(libRs.includes('internal_data_path()'), 'lib.rs debe derivar cacheDir Android desde internal_data_path()');
+  assert.ok(cacheRs.includes('load_baked_map_bundle'), 'cache/mod.rs debe cargar mapa 3D + grafo pre-cocinado');
+  assert.ok(cacheRs.includes('save_baked_map_bundle'), 'cache/mod.rs debe guardar mapa 3D + grafo pre-cocinado');
+  assert.ok(uiMod.includes('load_baked_map_bundle'), 'ui/mod.rs debe consultar caché binaria del mapa 3D');
+
+  // 2. Caché de pipeline / shaders wgpu
+  assert.ok(libRs.includes('PIPELINE_CACHE'), 'lib.rs debe habilitar Features::PIPELINE_CACHE si el adaptador lo soporta');
+  assert.ok(renderer3d.includes('create_pipeline_cache'), 'renderer_3d.rs debe crear wgpu::PipelineCache');
+  assert.ok(renderer3d.includes('get_data()'), 'renderer_3d.rs debe extraer y guardar bytes del PipelineCache');
+  assert.ok(uiMod.includes('pipeline_cache_key'), 'ui/mod.rs debe registrar clave de PipelineCache del adaptador');
+
+  // 3. Bytecode precompilado Lua 5.4 (provinces_latam, countries_latam, game_rules)
+  assert.ok(luaBridge.includes('ChunkMode::Binary'), 'lua_bridge/mod.rs debe cargar bytecode Lua 5.4 binario');
+  assert.ok(luaBridge.includes('.dump(true)'), 'lua_bridge/mod.rs debe compilar y guardar bytecode Lua 5.4');
+  assert.ok(luaBridge.includes('"countries_latam"'), 'Debe cachear bytecode de countries_latam.lua');
+  assert.ok(luaBridge.includes('"provinces_latam"'), 'Debe cachear bytecode de provinces_latam.lua');
+  assert.ok(luaBridge.includes('"game_rules"'), 'Debe cachear bytecode de game_rules.lua');
+  assert.ok(cacheRs.includes('usize::BITS'), 'La huella Lua debe separar bytecode de 32-bit y 64-bit');
+
+  // 4. Buffer temporal de Crónica / Gráficas históricas / Miniaturas
+  assert.ok(modelsRs.includes('struct ArchivedStockSample'), 'models/mod.rs debe definir ArchivedStockSample');
+  assert.ok(modelsRs.includes('struct MacroHistorySnapshot'), 'models/mod.rs debe definir MacroHistorySnapshot');
+  assert.ok(modelsRs.includes('struct CampaignThumbnail'), 'models/mod.rs debe definir CampaignThumbnail');
+  assert.ok(engineRs.includes('flush_history_buffer_to_cache'), 'engine/mod.rs debe volcar crónica y gráficas antiguas a caché');
+  assert.ok(engineRs.includes('save_player_campaign_thumbnail'), 'engine/mod.rs debe actualizar miniatura de campaña en caché');
+  assert.ok(settingsRs.includes('clear_all_cache'), 'settings_screen.rs debe permitir limpiar la caché nativa');
+
+  // 5. Líderes políticos aleatorios (Presidente y oposición con nombre, edad, nacionalidad) para jugador e IA
+  assert.ok(modelsRs.includes('struct LeaderProfile'), 'models/mod.rs debe definir LeaderProfile');
+  assert.ok(modelsRs.includes('pub fn president('), 'CountryState debe exponer president()');
+  assert.ok(modelsRs.includes('pub fn opposition_leaders('), 'CountryState debe exponer opposition_leaders()');
+  assert.ok(leadersRs.includes('assign_random_leaders_to_countries'), 'leaders.rs debe asignar líderes a jugador y todas las IA');
+  assert.ok(engineRs.includes('assign_random_leaders_to_countries'), 'engine/mod.rs debe generar líderes aleatorios al iniciar y configurar campaña');
+  assert.ok(aiRs.includes('generate_successor_leader'), 'ai/mod.rs debe soportar sucesión de líderes tras elecciones');
+  assert.ok(politicsRs.includes('PRESIDENCIA EN EJERCICIO'), 'politics_screen.rs debe mostrar al Presidente');
+  assert.ok(politicsRs.includes('Líder oposición'), 'politics_screen.rs debe mostrar líderes de oposición');
+  assert.ok(diplomacyRs.includes('Presidente:'), 'diplomacy_screen.rs debe mostrar al Presidente del país IA');
+  assert.ok(diplomacyRs.includes('Oposición:'), 'diplomacy_screen.rs debe mostrar líderes de oposición del país IA');
+  assert.ok(countrySelectRs.includes('party.leader.nationality'), 'country_select.rs debe mostrar nombre, edad y nacionalidad de líderes');
+  assert.ok(mapScreenRs.includes('Presidente:'), 'map_screen.rs debe mostrar al Presidente en el popup del país');
+});
+

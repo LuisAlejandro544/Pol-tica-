@@ -166,6 +166,7 @@ struct Map3dGpuResources {
     blit_shader: wgpu::ShaderModule,
     blit_pipeline_layout: wgpu::PipelineLayout,
     blit_pipeline: wgpu::RenderPipeline,
+    pipeline_cache: Option<wgpu::PipelineCache>,
     target_format: wgpu::TextureFormat,
 }
 
@@ -300,6 +301,22 @@ impl Map3dGpuResources {
             ],
         };
 
+        let pipeline_cache_key = crate::cache::wgpu_pipeline_cache_key();
+        let pipeline_cache = if device.features().contains(wgpu::Features::PIPELINE_CACHE) {
+            let cached_bytes = pipeline_cache_key.and_then(crate::cache::load_wgpu_pipeline_cache);
+            // SAFETY: `fallback: true` garantiza respaldo seguro si la caché binaria no coincide con el driver GPU.
+            let cache = unsafe {
+                device.create_pipeline_cache(&wgpu::PipelineCacheDescriptor {
+                    label: Some("latam_wgpu_pipeline_cache"),
+                    data: cached_bytes.as_deref(),
+                    fallback: true,
+                })
+            };
+            Some(cache)
+        } else {
+            None
+        };
+
         let map_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("latam_3d_pipeline"),
             layout: Some(&pipeline_layout),
@@ -337,7 +354,7 @@ impl Map3dGpuResources {
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             }),
             multiview: None,
-            cache: None,
+            cache: pipeline_cache.as_ref(),
         });
 
         let w = initial_size[0].max(64);
@@ -420,8 +437,15 @@ impl Map3dGpuResources {
             push_constant_ranges: &[],
         });
 
-        let blit_pipeline =
-            create_blit_pipeline(device, &blit_pipeline_layout, &blit_shader, target_format);
+        let blit_pipeline = create_blit_pipeline(
+            device,
+            &blit_pipeline_layout,
+            &blit_shader,
+            target_format,
+            pipeline_cache.as_ref(),
+        );
+
+        persist_pipeline_cache(pipeline_cache.as_ref(), pipeline_cache_key);
 
         Self {
             vertex_buffer,
@@ -442,6 +466,7 @@ impl Map3dGpuResources {
             blit_shader,
             blit_pipeline_layout,
             blit_pipeline,
+            pipeline_cache,
             target_format,
         }
     }
@@ -464,12 +489,14 @@ impl Map3dGpuResources {
             0,
             bytemuck::bytes_of(&blit_uniform_data),
         );
+        let pipeline_cache_ref = self.pipeline_cache.as_ref();
         let new_pipeline = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             create_blit_pipeline(
                 device,
                 &self.blit_pipeline_layout,
                 &self.blit_shader,
                 new_format,
+                pipeline_cache_ref,
             )
         }))
         .map_err(|payload| {
@@ -480,6 +507,10 @@ impl Map3dGpuResources {
         })?;
         self.blit_pipeline = new_pipeline;
         self.target_format = new_format;
+        persist_pipeline_cache(
+            self.pipeline_cache.as_ref(),
+            crate::cache::wgpu_pipeline_cache_key(),
+        );
         Ok(())
     }
 
@@ -645,11 +676,20 @@ fn panic_payload_to_string(payload: Box<dyn std::any::Any + Send>) -> String {
     }
 }
 
+fn persist_pipeline_cache(cache: Option<&wgpu::PipelineCache>, key: Option<&str>) {
+    if let (Some(pc), Some(k)) = (cache, key) {
+        if let Some(bytes) = pc.get_data() {
+            crate::cache::save_wgpu_pipeline_cache(k, &bytes);
+        }
+    }
+}
+
 fn create_blit_pipeline(
     device: &wgpu::Device,
     layout: &wgpu::PipelineLayout,
     shader: &wgpu::ShaderModule,
     target_format: wgpu::TextureFormat,
+    pipeline_cache: Option<&wgpu::PipelineCache>,
 ) -> wgpu::RenderPipeline {
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("latam_blit_pipeline"),
@@ -674,7 +714,7 @@ fn create_blit_pipeline(
             compilation_options: wgpu::PipelineCompilationOptions::default(),
         }),
         multiview: None,
-        cache: None,
+        cache: pipeline_cache,
     })
 }
 

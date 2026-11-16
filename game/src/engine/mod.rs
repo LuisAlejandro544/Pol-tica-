@@ -5,17 +5,42 @@
 //! empresas aleatorias con cotización bursátil y desempleo, y ejecutar reglas Lua 5.4
 //! + IA paralela (`rayon`) sin bloquear el hilo de interfaz móvil.
 
+pub mod leaders;
+
 use crate::ai::{apply_ai_decisions, evaluate_ai_countries, find_province_route, process_elections};
 use crate::lua_bridge::LuaEngine;
 use crate::models::{
-    ArmyUnit, CompanyCategoryTemplate, CompanyEntity, Difficulty, GameState, PlayerAction,
-    ProvinceGraph, ProvinceNode,
+    ArchivedStockSample, ArmyUnit, CampaignThumbnail, CompanyCategoryTemplate, CompanyEntity,
+    Difficulty, GameState, MacroHistorySnapshot, PlayerAction, ProvinceGraph, ProvinceNode,
 };
 use crossbeam_channel::{Receiver, Sender};
+use leaders::assign_random_leaders_to_countries;
 use rand::{rngs::ChaCha8Rng, RngExt, SeedableRng};
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+static CAMPAIGN_SEED_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+/// Genera una semilla pseudoaleatoria irrepetible combinando reloj del sistema, contador y país elegido.
+pub fn generate_runtime_seed(salt: &str) -> u64 {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0x9E37_79B9_7F4A_7C15);
+    let seq = CAMPAIGN_SEED_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let mut seed = nanos ^ seq.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    for b in salt.bytes() {
+        seed = seed.rotate_left(9) ^ (b as u64).wrapping_mul(0x94D0_49BB_1331_11EB);
+    }
+    if seed == 0 {
+        0xCAFE_BABE_1234_5678
+    } else {
+        seed
+    }
+}
 
 /// Comandos que la interfaz envía de forma asíncrona al trabajador de simulación.
 pub enum SimCommand {
@@ -27,12 +52,25 @@ pub enum SimCommand {
     NewCampaign {
         difficulty: Difficulty,
     },
+    ConfigureCampaign {
+        state: Box<GameState>,
+        player_country_id: String,
+        seed: u64,
+    },
 }
 
 /// Respuestas enviadas de regreso al hilo de interfaz cuando concluye el cálculo.
 pub enum SimResponse {
     TickCompleted(Box<GameState>),
     CampaignReady(Box<GameState>),
+    CampaignLoadProgress {
+        progress: f32,
+        stage: String,
+        detail: String,
+        units_configured: usize,
+        companies_founded: usize,
+    },
+    CampaignConfigured(Box<GameState>),
     Error(String),
 }
 
@@ -67,14 +105,32 @@ impl SimulationWorker {
                             graph = new_graph;
                         }
                         SimCommand::NewCampaign { difficulty } => {
-                            match build_initial_state(
-                                &lua_engine,
-                                &graph,
-                                &company_templates,
-                                difficulty,
-                            ) {
+                            match build_initial_state(&lua_engine, difficulty) {
                                 Ok(state) => {
                                     let _ = res_tx.send(SimResponse::CampaignReady(Box::new(state)));
+                                }
+                                Err(e) => {
+                                    let _ = res_tx.send(SimResponse::Error(e));
+                                }
+                            }
+                        }
+                        SimCommand::ConfigureCampaign {
+                            state,
+                            player_country_id,
+                            seed,
+                        } => {
+                            match configure_campaign_for_country(
+                                *state,
+                                &graph,
+                                &company_templates,
+                                &player_country_id,
+                                seed,
+                                &res_tx,
+                            ) {
+                                Ok(configured) => {
+                                    let _ = res_tx.send(SimResponse::CampaignConfigured(
+                                        Box::new(configured),
+                                    ));
                                 }
                                 Err(e) => {
                                     let _ = res_tx.send(SimResponse::Error(e));
@@ -122,6 +178,20 @@ impl SimulationWorker {
     pub fn request_new_campaign(&mut self, difficulty: Difficulty) {
         self.is_busy = true;
         let _ = self.tx.send(SimCommand::NewCampaign { difficulty });
+    }
+
+    pub fn request_configure_campaign(
+        &mut self,
+        state: &GameState,
+        player_country_id: String,
+        seed: u64,
+    ) {
+        self.is_busy = true;
+        let _ = self.tx.send(SimCommand::ConfigureCampaign {
+            state: Box::new(state.clone()),
+            player_country_id,
+            seed,
+        });
     }
 
     pub fn request_advance_days(&mut self, state: &GameState, days: u32) {
@@ -258,12 +328,7 @@ pub fn apply_player_action(
     }
 }
 
-fn build_initial_state(
-    lua: &LuaEngine,
-    graph: &ProvinceGraph,
-    company_templates: &[CompanyCategoryTemplate],
-    difficulty: Difficulty,
-) -> Result<GameState, String> {
+fn build_initial_state(lua: &LuaEngine, difficulty: Difficulty) -> Result<GameState, String> {
     let mut countries = lua
         .load_initial_countries()
         .map_err(|e| format!("Error cargando países desde Lua 5.4: {e}"))?;
@@ -288,68 +353,12 @@ fn build_initial_state(
         }
     }
 
-    // Sembrar unidades militares reales distribuidas en las provincias de cada país
-    let mut units = Vec::new();
-    let mut next_unit_id = 1_u64;
-    for (cid, country) in &countries {
-        let provs: Vec<&ProvinceNode> = graph
-            .values()
-            .filter(|p| p.country_id == *cid)
-            .collect();
-        let div_count = if provs.len() >= 3 && country.military.active_troops >= 60_000 {
-            3
-        } else if provs.len() >= 2 && country.military.active_troops >= 20_000 {
-            2
-        } else {
-            1
-        };
+    recompute_country_balances(&mut countries);
 
-        let mut remaining = country.military.active_troops.max(1_000);
-        for d in 0..div_count {
-            let troops = if d + 1 == div_count {
-                remaining
-            } else {
-                let share = (remaining / ((div_count - d) as u64)).max(1_000);
-                remaining = remaining.saturating_sub(share);
-                share
-            };
-            let (prov_mesh, world_pos) = if !provs.is_empty() {
-                let p = provs[(d * (provs.len() / div_count).max(1)) % provs.len()];
-                (p.mesh_name.clone(), p.world_pos)
-            } else {
-                (format!("PROV_{cid}_0_CAP"), [0.0, 0.4, 0.0])
-            };
-            units.push(ArmyUnit {
-                id: next_unit_id,
-                name: format!("Cuerpo {} #{}", cid, d + 1),
-                country_id: cid.clone(),
-                troops,
-                current_province: prov_mesh,
-                target_province: None,
-                route_queue: Vec::new(),
-                march_progress: 0.0,
-                world_pos,
-                morale: 82.0,
-            });
-            next_unit_id += 1;
-        }
-    }
-
-    // Calcular balance inicial realista con mantenimiento de soldados incluido
-    for country in countries.values_mut() {
-        let monthly_gdp = country.economy.gdp_usd_millions / 12.0;
-        let tax_rev = monthly_gdp * (country.economy.tax_rate_pct / 100.0);
-        let def_cost = monthly_gdp * (country.military.defense_budget_pct / 100.0);
-        let inf_cost = monthly_gdp * (country.economy.infra_investment_pct / 100.0);
-        let soc_cost = monthly_gdp * (country.economy.social_investment_pct / 100.0);
-        let debt_svc = (country.economy.gdp_usd_millions * (country.economy.debt_to_gdp_pct / 100.0)) * 0.0045;
-        let upkeep = country.estimated_troop_upkeep_m();
-        country.economy.troop_upkeep_usd_millions = upkeep;
-        country.economy.last_monthly_balance =
-            tax_rev - (def_cost + upkeep + inf_cost + soc_cost + debt_svc);
-    }
-
+    let seed = generate_runtime_seed("PREVIEW");
+    assign_random_leaders_to_countries(&mut countries, seed);
     let mut state = GameState {
+        campaign_seed: seed,
         total_days: 1,
         year: 2026,
         month: 1,
@@ -363,34 +372,314 @@ fn build_initial_state(
         selected_unit_id: None,
         countries,
         relations,
-        units,
-        next_unit_id,
+        units: Vec::new(),
+        next_unit_id: 1,
         companies: Vec::new(),
         next_company_id: 1,
         active_event: None,
         chronicle: Vec::new(),
+        pending_chronicle_archive: Vec::new(),
+        pending_stock_archive: Vec::new(),
+        pending_macro_archive: Vec::new(),
     };
-
-    // Sembrar 4 empresas pioneras en distintos países (no en todos) para que el mercado bursátil arranque vivo
-    let seed_countries = ["MX", "BR", "CO", "CL"];
-    for (idx, cid) in seed_countries.iter().enumerate() {
-        if state.countries.contains_key(*cid) && !company_templates.is_empty() {
-            let mut rng = ChaCha8Rng::seed_from_u64(0xCAFE_0001 + idx as u64);
-            let _ = try_found_company_in(
-                &mut state,
-                company_templates,
-                cid,
-                &mut rng,
-                idx % company_templates.len(),
-            );
-        }
-    }
 
     state.push_chronicle(
         "LATAM",
-        "Simulación en tiempo real lista. Elige una nación para gobernar.",
+        "Selecciona una nación para configurar líderes, unidades, mercados y empresas iniciales.",
     );
     Ok(state)
+}
+
+fn recompute_country_balances(countries: &mut BTreeMap<String, crate::models::CountryState>) {
+    for country in countries.values_mut() {
+        let monthly_gdp = country.economy.gdp_usd_millions / 12.0;
+        let tax_rev = monthly_gdp * (country.economy.tax_rate_pct / 100.0);
+        let def_cost = monthly_gdp * (country.military.defense_budget_pct / 100.0);
+        let inf_cost = monthly_gdp * (country.economy.infra_investment_pct / 100.0);
+        let soc_cost = monthly_gdp * (country.economy.social_investment_pct / 100.0);
+        let debt_svc =
+            (country.economy.gdp_usd_millions * (country.economy.debt_to_gdp_pct / 100.0)) * 0.0045;
+        let upkeep = country.estimated_troop_upkeep_m();
+        country.economy.troop_upkeep_usd_millions = upkeep;
+        country.economy.last_monthly_balance =
+            tax_rev - (def_cost + upkeep + inf_cost + soc_cost + debt_svc);
+    }
+}
+
+/// Configura una partida al elegir país: despliega soldados/unidades predeterminadas
+/// y forma empresas privadas aleatoriamente (solo en algunos países, nunca estáticas).
+fn configure_campaign_for_country(
+    mut state: GameState,
+    graph: &ProvinceGraph,
+    company_templates: &[CompanyCategoryTemplate],
+    player_country_id: &str,
+    seed: u64,
+    res_tx: &Sender<SimResponse>,
+) -> Result<GameState, String> {
+    if !state.countries.contains_key(player_country_id) {
+        return Err(format!("País seleccionado inválido: {player_country_id}"));
+    }
+
+    state.campaign_seed = seed;
+    state.player_country_id = Some(player_country_id.to_string());
+    state.selected_country_id = Some(player_country_id.to_string());
+    state.paused = false;
+
+    let country_name = state
+        .countries
+        .get(player_country_id)
+        .map(|c| c.name.clone())
+        .unwrap_or_else(|| player_country_id.to_string());
+
+    let _ = res_tx.send(SimResponse::CampaignLoadProgress {
+        progress: 0.18,
+        stage: "Designando líderes nacionales".to_string(),
+        detail: format!("Generando Presidente y oposición aleatoria para {country_name} y países IA..."),
+        units_configured: 0,
+        companies_founded: 0,
+    });
+
+    // Asignar aleatoriamente Presidente y líderes de oposición (nombre, edad y nacionalidad) para jugador e IA
+    assign_random_leaders_to_countries(&mut state.countries, seed ^ 0x9911_2026);
+
+    // Asegura nodos de respaldo en memoria para cualquier país sin malla cargada aún
+    let mut working_graph = graph.clone();
+    ensure_fallback_graph(&state.countries, &mut working_graph);
+
+    // 1. Configurar soldados predeterminados y número de unidades tácticas
+    setup_initial_units(&mut state, &working_graph, seed);
+
+    let units_count = state.units.len();
+    let _ = res_tx.send(SimResponse::CampaignLoadProgress {
+        progress: 0.56,
+        stage: "Desplegando unidades militares".to_string(),
+        detail: format!("Configurados {units_count} regimientos y guarniciones en Latinoamérica."),
+        units_configured: units_count,
+        companies_founded: 0,
+    });
+
+    // 2. Formar empresas iniciales aleatoriamente en algunos países (nunca en todos ni fijas)
+    seed_dynamic_initial_companies(&mut state, company_templates, seed);
+
+    let comp_count = state.companies.len();
+    let _ = res_tx.send(SimResponse::CampaignLoadProgress {
+        progress: 0.88,
+        stage: "Constituyendo mercado empresarial".to_string(),
+        detail: format!(
+            "Fundadas {comp_count} empresas aleatorias en plazas económicas seleccionadas."
+        ),
+        units_configured: units_count,
+        companies_founded: comp_count,
+    });
+
+    // 3. Seleccionar provincia y unidad inicial del jugador y recalcular balances
+    if let Some(first_player_prov) = working_graph
+        .values()
+        .find(|p| p.country_id == player_country_id)
+        .map(|p| p.mesh_name.clone())
+    {
+        state.selected_province_mesh = Some(first_player_prov);
+    }
+    state.selected_unit_id = state
+        .units
+        .iter()
+        .find(|u| u.country_id == player_country_id)
+        .map(|u| u.id);
+
+    recompute_country_balances(&mut state.countries);
+    state.sync_country_troop_totals();
+
+    let player_units = state
+        .units
+        .iter()
+        .filter(|u| u.country_id == player_country_id)
+        .count();
+    let player_troops = state
+        .countries
+        .get(player_country_id)
+        .map(|c| c.military.active_troops)
+        .unwrap_or(0);
+    let pres_summary = state
+        .countries
+        .get(player_country_id)
+        .and_then(|c| c.president())
+        .map(|l| format!("{} ({} años, {})", l.full_name, l.age, l.nationality))
+        .unwrap_or_else(|| "Mandatario designado".to_string());
+
+    state.push_chronicle(
+        player_country_id.to_string(),
+        format!(
+            "Asumes el liderazgo de {country_name} con {pres_summary}: {player_units} unidades ({player_troops} soldados) y {comp_count} empresas en Latam."
+        ),
+    );
+
+    save_player_campaign_thumbnail(&state);
+
+    let _ = res_tx.send(SimResponse::CampaignLoadProgress {
+        progress: 1.0,
+        stage: "Campaña lista".to_string(),
+        detail: format!("Despliegue completo en {country_name}."),
+        units_configured: units_count,
+        companies_founded: comp_count,
+    });
+
+    Ok(state)
+}
+
+fn setup_initial_units(state: &mut GameState, graph: &ProvinceGraph, seed: u64) {
+    state.units.clear();
+    state.next_unit_id = 1;
+
+    let mut rng = ChaCha8Rng::seed_from_u64(seed ^ 0xA11C_E001_55AA_9911);
+    let diff_ai_factor = match state.difficulty {
+        Difficulty::Normal => 1.0,
+        Difficulty::Desafiante => 1.08,
+        Difficulty::Realista => 1.15,
+    };
+
+    let country_ids: Vec<String> = state.countries.keys().cloned().collect();
+    for cid in country_ids {
+        let Some(country) = state.countries.get_mut(&cid) else {
+            continue;
+        };
+
+        let is_player = state.player_country_id.as_deref() == Some(cid.as_str());
+        let base_troops = country.military.active_troops.max(1_500);
+        let jitter = rng.random_range(0.92_f64..=1.10_f64);
+        let scaled_troops = if is_player {
+            ((base_troops as f64) * jitter).round() as u64
+        } else {
+            ((base_troops as f64) * jitter * diff_ai_factor).round() as u64
+        };
+        let total_troops = ((scaled_troops / 500).max(3)) * 500;
+        country.military.active_troops = total_troops;
+
+        let mut provs: Vec<&ProvinceNode> =
+            graph.values().filter(|p| p.country_id == cid).collect();
+        provs.sort_by(|a, b| a.mesh_name.cmp(&b.mesh_name));
+
+        let max_divs = if provs.is_empty() {
+            1
+        } else if total_troops >= 120_000 {
+            4.min(provs.len())
+        } else if total_troops >= 45_000 {
+            3.min(provs.len())
+        } else if total_troops >= 12_000 {
+            2.min(provs.len())
+        } else {
+            1
+        };
+
+        let div_count = if max_divs > 1 && rng.random_bool(0.45) {
+            (max_divs - 1).max(1)
+        } else {
+            max_divs
+        };
+
+        // Elegir provincias de despliegue de forma variada según la semilla
+        let mut chosen_indices: Vec<usize> = (0..provs.len()).collect();
+        for i in (1..chosen_indices.len()).rev() {
+            let j = rng.random_range(0..=i);
+            chosen_indices.swap(i, j);
+        }
+
+        let mut remaining = total_troops;
+        for d in 0..div_count {
+            let troops = if d + 1 == div_count {
+                remaining
+            } else {
+                let min_share = 1_000_u64.min(remaining);
+                let ideal = (remaining / ((div_count - d) as u64)).max(min_share);
+                let varied = ((ideal as f64) * rng.random_range(0.80_f64..=1.20_f64)).round() as u64;
+                let share = ((varied / 500).max(2) * 500).min(remaining.saturating_sub(1_000));
+                remaining = remaining.saturating_sub(share);
+                share
+            };
+
+            let (prov_mesh, world_pos) = if !provs.is_empty() {
+                let p = provs[chosen_indices[d % chosen_indices.len()]];
+                (p.mesh_name.clone(), p.world_pos)
+            } else {
+                (format!("PROV_{cid}_0_CAP"), [0.0, 0.4, 0.0])
+            };
+
+            let uid = state.next_unit_id;
+            state.next_unit_id += 1;
+            state.units.push(ArmyUnit {
+                id: uid,
+                name: format!("Cuerpo {} #{}", cid, d + 1),
+                country_id: cid.clone(),
+                troops,
+                current_province: prov_mesh,
+                target_province: None,
+                route_queue: Vec::new(),
+                march_progress: 0.0,
+                world_pos,
+                morale: rng.random_range(78.0..=90.0),
+            });
+        }
+    }
+}
+
+fn seed_dynamic_initial_companies(
+    state: &mut GameState,
+    company_templates: &[CompanyCategoryTemplate],
+    seed: u64,
+) {
+    state.companies.clear();
+    state.next_company_id = 1;
+    if company_templates.is_empty() || state.countries.is_empty() {
+        return;
+    }
+
+    let mut rng = ChaCha8Rng::seed_from_u64(seed ^ 0xC04A_91E5_7788_2026);
+    let mut ranked: Vec<(String, f64)> = state
+        .countries
+        .iter()
+        .map(|(cid, c)| {
+            let gdp_factor = (c.economy.gdp_usd_millions / 80_000.0).sqrt().clamp(0.4, 3.2);
+            let macro_score = (c.stability * 0.55
+                + (c.economy.gdp_growth_pct + 4.0).max(0.5) * 6.5
+                + gdp_factor * 12.0
+                - (c.economy.inflation_pct - 8.0).max(0.0) * 1.1)
+                .max(8.0);
+            let random_roll = rng.random_range(0.45_f64..=1.65_f64);
+            (cid.clone(), macro_score * random_roll)
+        })
+        .collect();
+
+    // Mezcla ponderada sin usar nunca una lista fija ni asignar a todos los países
+    ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    let target_countries = rng
+        .random_range(5_usize..=10_usize)
+        .min((state.countries.len() / 2).max(4))
+        .min(ranked.len());
+
+    for (cid, _) in ranked.into_iter().take(target_countries) {
+        let count_in_country = if rng.random_bool(0.24) { 2 } else { 1 };
+        for _ in 0..count_in_country {
+            let cat_idx = rng.random_range(0..company_templates.len());
+            if let Some(comp_idx) =
+                try_found_company_in(state, company_templates, &cid, &mut rng, cat_idx, false)
+            {
+                seed_initial_company_history(&mut state.companies[comp_idx], &mut rng);
+            }
+        }
+    }
+}
+
+fn seed_initial_company_history(company: &mut CompanyEntity, rng: &mut ChaCha8Rng) {
+    let mut price = company.share_price;
+    let mut history = Vec::with_capacity(8);
+    history.push(price);
+    for _ in 0..7 {
+        let step = rng.random_range(-0.025_f64..=0.028_f64);
+        price = (price * (1.0 + step)).clamp(2.5, 2_500.0);
+        history.push(price);
+    }
+    company.prev_share_price = history[history.len().saturating_sub(2)];
+    company.share_price = *history.last().unwrap_or(&price);
+    company.price_history = history;
 }
 
 fn days_in_month(year: i32, month: u8) -> u8 {
@@ -475,6 +764,20 @@ fn advance_single_day(
 
         process_elections(state);
 
+        // Archivar instantánea macroeconómica mensual y refrescar miniatura en caché
+        for (cid, c) in &state.countries {
+            state.pending_macro_archive.push(MacroHistorySnapshot {
+                day: state.total_days,
+                year: state.year,
+                month: state.month,
+                country_id: cid.clone(),
+                gdp_usd_millions: c.economy.gdp_usd_millions,
+                inflation_pct: c.economy.inflation_pct,
+                stability: c.stability,
+            });
+        }
+        save_player_campaign_thumbnail(state);
+
         if state.active_event.is_none()
             && state.player_country_id.is_some()
             && state.month % 4 == 0
@@ -486,7 +789,57 @@ fn advance_single_day(
         }
     }
 
+    // 7. Volcado periódico del buffer temporal de crónica, gráficas viejas e instantáneas a caché en disco
+    if state.total_days % 10 == 0
+        || state.pending_chronicle_archive.len() >= 8
+        || state.pending_stock_archive.len() >= 32
+        || state.pending_macro_archive.len() >= 21
+    {
+        flush_history_buffer_to_cache(state);
+    }
+
     Ok(())
+}
+
+fn save_player_campaign_thumbnail(state: &GameState) {
+    let Some(pid) = state.player_country_id.as_deref() else {
+        return;
+    };
+    let Some(c) = state.countries.get(pid) else {
+        return;
+    };
+    let president_name = c
+        .president()
+        .map(|l| l.full_name.clone())
+        .unwrap_or_else(|| "Mandatario".to_string());
+    crate::cache::save_campaign_thumbnail(&CampaignThumbnail {
+        campaign_seed: state.campaign_seed,
+        country_id: c.id.clone(),
+        country_name: c.name.clone(),
+        president_name,
+        date_label: state.date_label(),
+        gdp_usd_millions: c.economy.gdp_usd_millions,
+        active_troops: c.military.active_troops,
+        companies_count: state.companies.len(),
+    });
+}
+
+fn flush_history_buffer_to_cache(state: &mut GameState) {
+    if state.pending_chronicle_archive.is_empty()
+        && state.pending_stock_archive.is_empty()
+        && state.pending_macro_archive.is_empty()
+    {
+        return;
+    }
+    let chronicle_batch = std::mem::take(&mut state.pending_chronicle_archive);
+    let stock_batch = std::mem::take(&mut state.pending_stock_archive);
+    let macro_batch = std::mem::take(&mut state.pending_macro_archive);
+    crate::cache::append_campaign_history_batch(
+        state.campaign_seed,
+        &chronicle_batch,
+        &stock_batch,
+        &macro_batch,
+    );
 }
 
 fn step_unit_movements(state: &mut GameState, graph: &ProvinceGraph) {
@@ -572,11 +925,16 @@ fn step_companies_and_stocks(
     state: &mut GameState,
     templates: &[CompanyCategoryTemplate],
 ) {
-    let mut rng = ChaCha8Rng::seed_from_u64(
-        state.total_days.wrapping_mul(0x517C_C1B7_2722_0A95) ^ 0xA5A5_5A5A,
-    );
+    let day_seed = state
+        .campaign_seed
+        .wrapping_add(state.total_days.wrapping_mul(0x517C_C1B7_2722_0A95))
+        ^ state.next_company_id.wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        ^ 0xA5A5_5A5A;
+    let mut rng = ChaCha8Rng::seed_from_u64(day_seed);
 
     // 1. Actualización diaria del precio de acción de cada empresa según macroeconomía del país
+    let mut evicted_stocks: Vec<ArchivedStockSample> = Vec::new();
+    let current_day = state.total_days;
     for comp in &mut state.companies {
         let Some(c) = state.countries.get(&comp.country_id) else {
             continue;
@@ -599,17 +957,30 @@ fn step_companies_and_stocks(
 
         comp.price_history.push(comp.share_price);
         if comp.price_history.len() > 24 {
-            comp.price_history.remove(0);
+            let old_price = comp.price_history.remove(0);
+            evicted_stocks.push(ArchivedStockSample {
+                company_id: comp.id,
+                company_name: comp.name.clone(),
+                day: current_day,
+                share_price: old_price,
+            });
         }
     }
+    state.pending_stock_archive.extend(evicted_stocks);
 
-    // 2. Cada 10 días de juego, evaluar si nace aleatoriamente una nueva empresa en algún país (no en todos)
-    if state.total_days % 10 != 0 || templates.is_empty() || state.companies.len() >= 65 {
+    // 2. Cada 5 días de juego, evaluar dinámicamente el nacimiento de nuevas empresas (nunca estático)
+    if state.total_days % 5 != 0 || templates.is_empty() || state.companies.len() >= 80 {
         return;
     }
 
-    // Probabilidad moderada (~55% cada 10 días) de que brote una empresa en algún país propicio
-    if !rng.random_bool(0.55) {
+    let spawn_prob = if state.companies.len() < 24 {
+        0.78
+    } else if state.companies.len() < 48 {
+        0.58
+    } else {
+        0.34
+    };
+    if !rng.random_bool(spawn_prob) {
         return;
     }
 
@@ -628,18 +999,20 @@ fn step_companies_and_stocks(
             .iter()
             .filter(|co| co.country_id == cid)
             .count();
-        // Limitar concentración para que no aparezcan en todos igual ni saturen un solo país
-        if existing_count >= 6 {
+        // Limitar concentración para que sigan brotando en países distintos
+        if existing_count >= 7 {
             continue;
         }
-        let score = (c.stability * 0.6
-            + (c.economy.gdp_growth_pct + 4.0).max(0.5) * 8.0
-            + c.economy.infra_investment_pct * 4.0
-            - (c.economy.inflation_pct - 8.0).max(0.0) * 1.4
-            - (c.economy.tax_rate_pct - 22.0).max(0.0) * 1.6)
-            / ((existing_count as f64) * 0.75 + 1.0);
-        if score > 10.0 {
-            weights.push((cid, score));
+        let score = (20.0
+            + c.stability * 0.55
+            + (c.economy.gdp_growth_pct + 4.0).max(0.5) * 7.5
+            + c.economy.infra_investment_pct * 3.8
+            + c.economy.unemployment_pct * 0.7
+            - (c.economy.inflation_pct - 9.0).max(0.0) * 1.1
+            - (c.economy.tax_rate_pct - 23.0).max(0.0) * 1.3)
+            / ((existing_count as f64) * 0.65 + 1.0);
+        if score > 6.0 {
+            weights.push((cid, score * rng.random_range(0.75_f64..=1.35_f64)));
         }
     }
 
@@ -659,7 +1032,7 @@ fn step_companies_and_stocks(
     }
 
     let cat_idx = rng.random_range(0..templates.len());
-    let _ = try_found_company_in(state, templates, &chosen_cid, &mut rng, cat_idx);
+    let _ = try_found_company_in(state, templates, &chosen_cid, &mut rng, cat_idx, true);
 }
 
 fn try_found_company_in(
@@ -668,7 +1041,8 @@ fn try_found_company_in(
     country_id: &str,
     rng: &mut ChaCha8Rng,
     cat_idx: usize,
-) -> Option<()> {
+    log_chronicle: bool,
+) -> Option<usize> {
     let tmpl = templates.get(cat_idx)?;
     let country_snapshot = state.countries.get(country_id)?.clone();
 
@@ -714,6 +1088,7 @@ fn try_found_company_in(
         rate_sensitivity: tmpl.rate_sensitivity,
     };
     state.companies.push(company);
+    let inserted_idx = state.companies.len() - 1;
 
     // Impacto inmediato y lógico en empleo (baja desempleo) y PIB del país
     if let Some(c) = state.countries.get_mut(country_id) {
@@ -725,16 +1100,18 @@ fn try_found_company_in(
         c.economy.gdp_growth_pct = (c.economy.gdp_growth_pct + 0.08).min(13.5);
     }
 
-    state.push_chronicle(
-        country_id.to_string(),
-        format!(
-            "Nueva empresa en {}: {} ({}) — +{} empleos, +${:.0}M PIB.",
-            country_snapshot.name,
-            final_name,
-            tmpl.category.label(),
-            employees,
-            annual_gdp_contribution_m
-        ),
-    );
-    Some(())
+    if log_chronicle {
+        state.push_chronicle(
+            country_id.to_string(),
+            format!(
+                "Nueva empresa en {}: {} ({}) — +{} empleos, +${:.0}M PIB.",
+                country_snapshot.name,
+                final_name,
+                tmpl.category.label(),
+                employees,
+                annual_gdp_contribution_m
+            ),
+        );
+    }
+    Some(inserted_idx)
 }

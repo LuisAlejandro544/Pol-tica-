@@ -6,7 +6,7 @@
 //! en paneles translúcidos de acero y latón.
 
 use crate::map::Latam3dScene;
-use crate::models::{GameState, MapMode, ProvinceData, ScreenRoute};
+use crate::models::{GameState, MapMode, ProvinceData, ProvinceGraph, ScreenRoute};
 use crate::ui::components::map_canvas::{render_latam_map, MapCanvasConfig, MapViewportState};
 use crate::ui::theme::{
     card_frame, draw_corner_rivets, draw_country_shield, draw_gauge_bar, draw_section_header,
@@ -23,6 +23,7 @@ use std::sync::Arc;
 pub struct MapScreenResult {
     pub open_diplomacy_with: Option<String>,
     pub order_unit_move: Option<(u64, String)>,
+    pub recruit_in_province: Option<(String, u64, f64)>,
     pub overlay_rects: Vec<Rect>,
 }
 
@@ -34,6 +35,7 @@ pub fn render_map_screen(
     gpu_info: &str,
     gpu_3d_error: &Arc<Mutex<Option<String>>>,
     provinces_catalog: &BTreeMap<String, ProvinceData>,
+    province_graph: &ProvinceGraph,
     state: &mut GameState,
     map_mode: &mut MapMode,
     viewport: &mut MapViewportState,
@@ -42,6 +44,7 @@ pub fn render_map_screen(
     let mut result = MapScreenResult {
         open_diplomacy_with: None,
         order_unit_move: None,
+        recruit_in_province: None,
         overlay_rects: Vec::new(),
     };
 
@@ -329,41 +332,115 @@ pub fn render_map_screen(
                             });
 
                             if let Some(prov_mesh) = &state.selected_province_mesh {
-                                if let Some(prov) = provinces_catalog.get(prov_mesh) {
-                                    if prov.country_id == country.id {
-                                        let stationed: u64 = state
-                                            .units
-                                            .iter()
-                                            .filter(|u| u.current_province == *prov_mesh)
-                                            .map(|u| u.troops)
-                                            .sum();
-                                        ui.add_space(4.0);
-                                        card_frame(Some(ACCENT_CYAN)).inner_margin(5.0).show(
-                                            ui,
-                                            |ui| {
+                                let prov_meta = provinces_catalog
+                                    .get(prov_mesh)
+                                    .filter(|p| p.country_id == country.id)
+                                    .map(|p| {
+                                        (
+                                            p.name.clone(),
+                                            p.id.clone(),
+                                            p.admin_type.clone(),
+                                            p.terrain_type.clone(),
+                                        )
+                                    })
+                                    .or_else(|| {
+                                        province_graph
+                                            .get(prov_mesh)
+                                            .filter(|p| p.country_id == country.id)
+                                            .map(|p| {
+                                                (
+                                                    p.name.clone(),
+                                                    country.id.clone(),
+                                                    "Región".to_string(),
+                                                    p.terrain_type.clone(),
+                                                )
+                                            })
+                                    });
+
+                                if let Some((prov_name, prov_id, admin_type, terrain_type)) =
+                                    prov_meta
+                                {
+                                    let stationed: u64 = state
+                                        .units
+                                        .iter()
+                                        .filter(|u| u.current_province == *prov_mesh)
+                                        .map(|u| u.troops)
+                                        .sum();
+                                    ui.add_space(4.0);
+                                    card_frame(Some(ACCENT_CYAN)).inner_margin(6.0).show(
+                                        ui,
+                                        |ui| {
+                                            ui.label(
+                                                RichText::new(format!(
+                                                    "Región: {} ({})",
+                                                    prov_name, prov_id
+                                                ))
+                                                .strong()
+                                                .size(11.5)
+                                                .color(ACCENT_CYAN),
+                                            );
+                                            ui.label(
+                                                RichText::new(format!(
+                                                    "{} • {} • Tropas aquí: {}",
+                                                    admin_type, terrain_type, stationed
+                                                ))
+                                                .size(10.5)
+                                                .color(TEXT_MUTED),
+                                            );
+
+                                            if is_player {
+                                                ui.add_space(4.0);
                                                 ui.label(
-                                                    RichText::new(format!(
-                                                        "Estado: {} ({})",
-                                                        prov.name, prov.id
-                                                    ))
-                                                    .strong()
-                                                    .size(11.5)
-                                                    .color(ACCENT_CYAN),
+                                                    RichText::new("Reclutar tropas aquí:")
+                                                        .strong()
+                                                        .size(10.5)
+                                                        .color(ACCENT_GOLD),
                                                 );
-                                                ui.label(
-                                                    RichText::new(format!(
-                                                        "{} • {} • Tropas aquí: {}",
-                                                        prov.admin_type,
-                                                        prov.terrain_type,
-                                                        stationed
-                                                    ))
-                                                    .size(10.5)
-                                                    .color(TEXT_MUTED),
-                                                );
-                                            },
-                                        );
-                                    }
+                                                ui.horizontal(|ui| {
+                                                    ui.spacing_mut().item_spacing.x = 4.0;
+                                                    let btn_w =
+                                                        ((ui.available_width() - 8.0) / 3.0)
+                                                            .max(66.0);
+                                                    for (troops, cost_m, short_lbl) in [
+                                                        (1_000_u64, 70.0_f64, "+1K ($70M)"),
+                                                        (2_500_u64, 175.0_f64, "+2.5K ($175M)"),
+                                                        (5_000_u64, 350.0_f64, "+5K ($350M)"),
+                                                    ] {
+                                                        let can_pay =
+                                                            country.economy.treasury_usd_millions
+                                                                >= cost_m;
+                                                        if game_button(
+                                                            ui,
+                                                            Vec2::new(btn_w, 26.0),
+                                                            short_lbl,
+                                                            None,
+                                                            can_pay,
+                                                            Some(ACCENT_GOLD),
+                                                        )
+                                                        .clicked()
+                                                            && can_pay
+                                                        {
+                                                            result.recruit_in_province = Some((
+                                                                prov_mesh.clone(),
+                                                                troops,
+                                                                cost_m,
+                                                            ));
+                                                        }
+                                                    }
+                                                });
+                                            }
+                                        },
+                                    );
                                 }
+                            } else if is_player {
+                                ui.add_space(4.0);
+                                ui.label(
+                                    RichText::new(
+                                        "Toca una de tus regiones en el mapa para reclutar tropas directamente allí.",
+                                    )
+                                    .size(10.5)
+                                    .color(ACCENT_CYAN),
+                                );
                             }
 
                             ui.add_space(4.0);
@@ -433,6 +510,16 @@ pub fn render_map_screen(
                                         ))
                                         .size(10.5)
                                         .color(TEXT_MUTED),
+                                    );
+                                    ui.label(
+                                        RichText::new(format!(
+                                            "Presidente: {} ({} años, {})",
+                                            ruling.leader.full_name,
+                                            ruling.leader.age,
+                                            ruling.leader.nationality
+                                        ))
+                                        .size(10.5)
+                                        .color(ACCENT_CYAN),
                                     );
                                 }
                             });

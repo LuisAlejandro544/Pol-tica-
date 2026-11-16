@@ -34,9 +34,11 @@ android-activity = { version = "0.6", features = ["native-activity"] }
 # Motor de scripting Lua 5.4 compilado estáticamente dentro del binario .so (MIT)
 mlua = { version = "0.11", features = ["lua54", "vendored", "serde", "send"] }
 
-# Serialización de estado, partidas guardadas y datos Lua <-> Rust (MIT OR Apache-2.0)
+# Serialización de estado, partidas guardadas, caché binaria y datos Lua <-> Rust (MIT OR Apache-2.0)
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+postcard = { version = "1.1", features = ["alloc"] }
+lz4_flex = "0.11"
 
 # Lectura e interpretación del mapa vectorial SVG de respaldo (MIT OR Apache-2.0)
 roxmltree = "0.21"

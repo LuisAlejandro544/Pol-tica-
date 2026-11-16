@@ -92,6 +92,20 @@ pub fn render_settings_screen(
                         .size(11.5)
                         .color(TEXT_MUTED),
                     );
+                    let cache_stats = crate::cache::inspect_cache_stats();
+                    ui.label(
+                        RichText::new(format!(
+                            "Caché nativa ({}): Total {}  |  Mapa 3D: {}  |  Shaders wgpu: {}  |  Lua 5.4: {}  |  Historial: {}",
+                            crate::cache::cache_dir().display(),
+                            format_cache_bytes(cache_stats.total_bytes),
+                            format_cache_bytes(cache_stats.map_bytes),
+                            format_cache_bytes(cache_stats.shader_bytes),
+                            format_cache_bytes(cache_stats.lua_bytes),
+                            format_cache_bytes(cache_stats.history_bytes),
+                        ))
+                        .size(11.0)
+                        .color(TEXT_MUTED),
+                    );
                 });
 
                 ui.add_space(12.0);
@@ -134,9 +148,31 @@ pub fn render_settings_screen(
                     {
                         action = SettingsAction::ReturnToMainMenu;
                     }
+                    if game_button(
+                        ui,
+                        Vec2::new(160.0, 42.0),
+                        "Limpiar Caché",
+                        None,
+                        false,
+                        Some(ACCENT_CYAN),
+                    )
+                    .clicked()
+                    {
+                        let _ = crate::cache::clear_all_cache();
+                    }
                 });
             });
         });
 
     action
+}
+
+fn format_cache_bytes(bytes: u64) -> String {
+    if bytes >= 1_048_576 {
+        format!("{:.2} MB", (bytes as f64) / 1_048_576.0)
+    } else if bytes >= 1_024 {
+        format!("{:.1} KB", (bytes as f64) / 1_024.0)
+    } else {
+        format!("{bytes} B")
+    }
 }

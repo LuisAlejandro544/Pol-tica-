@@ -5,6 +5,7 @@ pub mod companies_screen;
 pub mod country_select;
 pub mod diplomacy_screen;
 pub mod economy_screen;
+pub mod loading_screen;
 pub mod main_menu;
 pub mod map_screen;
 pub mod military_screen;

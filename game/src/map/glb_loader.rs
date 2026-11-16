@@ -9,11 +9,13 @@ use crate::models::{ProvinceData, ProvinceGraph, ProvinceNode};
 use bytemuck::{Pod, Zeroable};
 use glam::{Mat3, Mat4, Vec3};
 use gltf::mesh::util::{ReadColors, ReadIndices};
+use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
 #[repr(C)]
-#[derive(Copy, Clone, Debug, Pod, Zeroable)]
+#[derive(Copy, Clone, Debug, Pod, Zeroable, Serialize, Deserialize)]
 pub struct Vertex3D {
     pub position: [f32; 3],
     pub normal: [f32; 3],
@@ -68,11 +70,10 @@ pub struct Latam3dScene {
 }
 
 impl Latam3dScene {
-    /// Intenta cargar `maps/latinoamerica_3d.glb` desde los assets incrustados o rutas locales.
-    /// Devuelve `Ok(None)` si el `.glb` aún no está presente para permitir respaldo SVG.
-    pub fn load_embedded_or_disk() -> Result<Option<Self>, String> {
+    /// Lee los bytes crudos de `maps/latinoamerica_3d.glb` sin parsear glTF aún (para huella de caché).
+    pub fn read_embedded_or_disk_glb_bytes() -> Option<Cow<'static, [u8]>> {
         if let Some(file) = ASSETS_DIR.get_file("maps/latinoamerica_3d.glb") {
-            return Self::from_glb_bytes(file.contents()).map(Some);
+            return Some(Cow::Borrowed(file.contents()));
         }
 
         #[cfg(not(target_os = "android"))]
@@ -82,11 +83,20 @@ impl Latam3dScene {
             "game/assets/maps/latinoamerica_3d.glb",
         ] {
             if let Ok(bytes) = std::fs::read(disk_path) {
-                return Self::from_glb_bytes(&bytes).map(Some);
+                return Some(Cow::Owned(bytes));
             }
         }
 
-        Ok(None)
+        None
+    }
+
+    /// Intenta cargar `maps/latinoamerica_3d.glb` desde los assets incrustados o rutas locales.
+    /// Devuelve `Ok(None)` si el `.glb` aún no está presente para permitir respaldo SVG.
+    pub fn load_embedded_or_disk() -> Result<Option<Self>, String> {
+        let Some(bytes) = Self::read_embedded_or_disk_glb_bytes() else {
+            return Ok(None);
+        };
+        Self::from_glb_bytes(bytes.as_ref()).map(Some)
     }
 
     pub fn from_glb_bytes(bytes: &[u8]) -> Result<Self, String> {

@@ -446,10 +446,30 @@ pub fn process_elections(state: &mut GameState) {
                 }
 
                 country.political_parties[best_idx].is_ruling = true;
+                if country.political_parties[best_idx].leader.age > 74 {
+                    let used: Vec<String> = country
+                        .political_parties
+                        .iter()
+                        .map(|p| p.leader.full_name.clone())
+                        .collect();
+                    let new_leader = crate::engine::leaders::generate_successor_leader(
+                        &id,
+                        true,
+                        state.campaign_seed.wrapping_add(state.total_days),
+                        &used,
+                    );
+                    country.political_parties[best_idx].leader = new_leader;
+                }
                 let winner = &country.political_parties[best_idx];
                 election_msg = Some(format!(
-                    "Elecciones en {}: {} ({}) gana con {:.1}% del Congreso.",
-                    country.name, winner.name, winner.acronym, winner.seats_pct
+                    "Elecciones en {}: {} ({}) gana con {:.1}% del Congreso; preside {} ({} años, {}).",
+                    country.name,
+                    winner.name,
+                    winner.acronym,
+                    winner.seats_pct,
+                    winner.leader.full_name,
+                    winner.leader.age,
+                    winner.leader.nationality
                 ));
             }
         }

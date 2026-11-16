@@ -13,6 +13,7 @@ use std::collections::BTreeMap;
 pub enum ScreenRoute {
     MainMenu,
     CountrySelect,
+    CampaignLoading,
     WorldMap,
     Economy,
     Companies,
@@ -39,6 +40,24 @@ pub enum Difficulty {
     Realista,
 }
 
+/// Perfil de líder político (Presidente o líder de partido de oposición).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LeaderProfile {
+    pub full_name: String,
+    pub age: u8,
+    pub nationality: String,
+}
+
+impl Default for LeaderProfile {
+    fn default() -> Self {
+        Self {
+            full_name: "Por designar".to_string(),
+            age: 48,
+            nationality: "Latinoamericana".to_string(),
+        }
+    }
+}
+
 /// Partido político dentro del congreso o asamblea de un país.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PoliticalParty {
@@ -48,6 +67,8 @@ pub struct PoliticalParty {
     pub seats_pct: f64,
     pub approval_pct: f64,
     pub is_ruling: bool,
+    #[serde(default)]
+    pub leader: LeaderProfile,
 }
 
 /// Estado macroeconómico, monetario, laboral y fiscal de una nación.
@@ -233,6 +254,20 @@ impl CountryState {
         self.political_parties.iter().find(|p| p.is_ruling)
     }
 
+    /// Devuelve el perfil del Presidente en ejercicio (líder del partido gobernante).
+    pub fn president(&self) -> Option<&LeaderProfile> {
+        self.ruling_party().map(|p| &p.leader)
+    }
+
+    /// Devuelve los líderes de los partidos de oposición ordenados tal como figuran en el Congreso.
+    pub fn opposition_leaders(&self) -> Vec<(&PoliticalParty, &LeaderProfile)> {
+        self.political_parties
+            .iter()
+            .filter(|p| !p.is_ruling)
+            .map(|p| (p, &p.leader))
+            .collect()
+    }
+
     /// Costo mensual de mantenimiento por soldados activos en millones de USD.
     pub fn estimated_troop_upkeep_m(&self) -> f64 {
         (self.military.active_troops as f64 / 1_000.0) * 1.35
@@ -317,6 +352,40 @@ pub struct ChronicleEntry {
     pub summary: String,
 }
 
+/// Muestra histórica antigua de cotización bursátil movida al buffer de caché en disco.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArchivedStockSample {
+    pub company_id: u64,
+    pub company_name: String,
+    pub day: u64,
+    pub share_price: f64,
+}
+
+/// Instantánea mensual macroeconómica archivada en el buffer temporal de caché.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MacroHistorySnapshot {
+    pub day: u64,
+    pub year: i32,
+    pub month: u8,
+    pub country_id: String,
+    pub gdp_usd_millions: f64,
+    pub inflation_pct: f64,
+    pub stability: f64,
+}
+
+/// Miniatura ligera de campaña guardada en caché para vistas previas y resumen rápido.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CampaignThumbnail {
+    pub campaign_seed: u64,
+    pub country_id: String,
+    pub country_name: String,
+    pub president_name: String,
+    pub date_label: String,
+    pub gdp_usd_millions: f64,
+    pub active_troops: u64,
+    pub companies_count: usize,
+}
+
 /// Acciones emitidas desde la interfaz que deben preservarse aunque el hilo de simulación esté ocupado.
 #[derive(Debug, Clone)]
 pub enum PlayerAction {
@@ -335,6 +404,7 @@ pub enum PlayerAction {
 /// Estado global completo de la partida en memoria (simulación continua en tiempo real).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GameState {
+    pub campaign_seed: u64,
     pub total_days: u64,
     pub year: i32,
     pub month: u8,
@@ -354,6 +424,12 @@ pub struct GameState {
     pub next_company_id: u64,
     pub active_event: Option<GameEvent>,
     pub chronicle: Vec<ChronicleEntry>,
+    #[serde(skip)]
+    pub pending_chronicle_archive: Vec<ChronicleEntry>,
+    #[serde(skip)]
+    pub pending_stock_archive: Vec<ArchivedStockSample>,
+    #[serde(skip)]
+    pub pending_macro_archive: Vec<MacroHistorySnapshot>,
 }
 
 impl GameState {
@@ -406,8 +482,10 @@ impl GameState {
             summary: summary.into(),
         };
         self.chronicle.insert(0, entry);
-        if self.chronicle.len() > 70 {
-            self.chronicle.truncate(70);
+        while self.chronicle.len() > 70 {
+            if let Some(evicted) = self.chronicle.pop() {
+                self.pending_chronicle_archive.push(evicted);
+            }
         }
     }
 
