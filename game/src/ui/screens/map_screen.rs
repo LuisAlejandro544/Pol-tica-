@@ -20,6 +20,7 @@ use std::sync::Arc;
 
 pub struct MapScreenResult {
     pub open_diplomacy_with: Option<String>,
+    pub order_unit_move: Option<(u64, String)>,
 }
 
 pub fn render_map_screen(
@@ -36,6 +37,7 @@ pub fn render_map_screen(
 ) -> MapScreenResult {
     let mut result = MapScreenResult {
         open_diplomacy_with: None,
+        order_unit_move: None,
     };
 
     let avail = ui.available_size();
@@ -81,7 +83,7 @@ pub fn render_map_screen(
                             let active = *map_mode == mode;
                             if game_button(
                                 ui,
-                                Vec2::new(btn_w, 32.0),
+                                Vec2::new(btn_w, 28.0),
                                 title,
                                 Some(icon),
                                 active,
@@ -93,7 +95,76 @@ pub fn render_map_screen(
                             }
                         }
 
-                        ui.add_space(6.0);
+                        if let Some(uid) = state.selected_unit_id {
+                            if let Some(unit) = state.units.iter().find(|u| u.id == uid).cloned() {
+                                let is_mine = state.player_country_id.as_deref()
+                                    == Some(unit.country_id.as_str());
+                                card_frame(Some(if is_mine { ACCENT_CYAN } else { ACCENT_GOLD }))
+                                    .inner_margin(6.0)
+                                    .show(ui, |ui| {
+                                        ui.horizontal(|ui| {
+                                            ui.label(
+                                                RichText::new(format!(
+                                                    "{} ({})",
+                                                    unit.name, unit.troops
+                                                ))
+                                                .strong()
+                                                .size(11.0)
+                                                .color(ACCENT_GOLD),
+                                            );
+                                            ui.with_layout(
+                                                egui::Layout::right_to_left(egui::Align::Center),
+                                                |ui| {
+                                                    if game_button(
+                                                        ui,
+                                                        Vec2::new(24.0, 20.0),
+                                                        "X",
+                                                        None,
+                                                        false,
+                                                        Some(ACCENT_CRIMSON),
+                                                    )
+                                                    .clicked()
+                                                    {
+                                                        state.selected_unit_id = None;
+                                                    }
+                                                },
+                                            );
+                                        });
+                                        let cur_name = provinces_catalog
+                                            .get(&unit.current_province)
+                                            .map(|p| p.name.as_str())
+                                            .unwrap_or(&unit.current_province);
+                                        let status = if let Some(tgt) = &unit.target_province {
+                                            let tgt_name = provinces_catalog
+                                                .get(tgt)
+                                                .map(|p| p.name.as_str())
+                                                .unwrap_or(tgt);
+                                            format!(
+                                                "Marcha -> {} ({:.0}%)",
+                                                tgt_name,
+                                                unit.march_progress * 100.0
+                                            )
+                                        } else {
+                                            format!("En {cur_name}")
+                                        };
+                                        ui.label(
+                                            RichText::new(status).size(10.5).color(TEXT_PRIMARY),
+                                        );
+                                        if is_mine {
+                                            ui.label(
+                                                RichText::new(
+                                                    "Toca un estado en el mapa para mover",
+                                                )
+                                                .size(10.0)
+                                                .color(ACCENT_CYAN),
+                                            );
+                                        }
+                                    });
+                                ui.add_space(4.0);
+                            }
+                        }
+
+                        ui.add_space(4.0);
                         draw_section_header(
                             ui,
                             GameIcon::Dispatch,
@@ -148,9 +219,35 @@ pub fn render_map_screen(
                     *map_mode,
                     viewport,
                 ) {
-                    state.selected_country_id = Some(hit.country_id);
-                    state.selected_province_mesh = hit.province_mesh;
-                    *show_country_popup = true;
+                    if let Some(uid) = hit.unit_id {
+                        state.selected_unit_id = Some(uid);
+                        state.selected_country_id = Some(hit.country_id);
+                    } else {
+                        // Si hay una unidad propia seleccionada y el toque es en un estado válido, ordenamos marcha directa
+                        let mut moved_unit = false;
+                        if let (Some(uid), Some(prov_mesh), Some(pid)) = (
+                            state.selected_unit_id,
+                            hit.province_mesh.as_ref(),
+                            state.player_country_id.as_ref(),
+                        ) {
+                            let owns_unit = state
+                                .units
+                                .iter()
+                                .any(|u| u.id == uid && u.country_id == *pid);
+                            let rel = state.get_relation(pid, &hit.country_id);
+                            let can_enter = hit.country_id == *pid || rel.alliance || rel.at_war;
+                            if owns_unit && can_enter {
+                                result.order_unit_move = Some((uid, prov_mesh.clone()));
+                                moved_unit = true;
+                            }
+                        }
+
+                        state.selected_country_id = Some(hit.country_id);
+                        state.selected_province_mesh = hit.province_mesh;
+                        if !moved_unit {
+                            *show_country_popup = true;
+                        }
+                    }
                 }
             },
         );
@@ -204,13 +301,19 @@ pub fn render_map_screen(
                             if let Some(prov_mesh) = &state.selected_province_mesh {
                                 if let Some(prov) = provinces_catalog.get(prov_mesh) {
                                     if prov.country_id == country.id {
+                                        let stationed: u64 = state
+                                            .units
+                                            .iter()
+                                            .filter(|u| u.current_province == *prov_mesh)
+                                            .map(|u| u.troops)
+                                            .sum();
                                         ui.add_space(4.0);
                                         card_frame(Some(ACCENT_CYAN)).inner_margin(6.0).show(
                                             ui,
                                             |ui| {
                                                 ui.label(
                                                     RichText::new(format!(
-                                                        "Provincia: {} ({})",
+                                                        "Estado: {} ({})",
                                                         prov.name, prov.id
                                                     ))
                                                     .strong()
@@ -219,10 +322,10 @@ pub fn render_map_screen(
                                                 );
                                                 ui.label(
                                                     RichText::new(format!(
-                                                        "{} • {} • Relieve {:.2}",
+                                                        "{} • {} • Tropas aquí: {}",
                                                         prov.admin_type,
                                                         prov.terrain_type,
-                                                        prov.elevation_avg
+                                                        stationed
                                                     ))
                                                     .size(11.0)
                                                     .color(TEXT_MUTED),

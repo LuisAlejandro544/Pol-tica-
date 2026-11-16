@@ -15,32 +15,38 @@ use egui::{Color32, CornerRadius, Margin, RichText, Sense, Stroke, Ui, Vec2};
 pub enum TopBarAction {
     None,
     TogglePause,
-    AdvanceOneTurn,
     SetSpeed(u8),
 }
 
-/// Barra superior persistente durante la campaña: escudo + indicadores a la izquierda y reloj/velocidad fijado a la derecha.
-pub fn render_top_hud(ui: &mut Ui, state: &GameState, sim_busy: bool) -> TopBarAction {
+/// Barra superior persistente durante la campaña: escudo + indicadores a la izquierda y reloj en tiempo real a la derecha.
+pub fn render_top_hud(ui: &mut Ui, state: &GameState, _sim_busy: bool) -> TopBarAction {
     let mut action = TopBarAction::None;
 
     panel_frame(true)
-        .inner_margin(Margin::symmetric(8, 5))
+        .inner_margin(Margin::symmetric(8, 4))
         .show(ui, |ui| {
+            ui.set_height(38.0);
+            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+            ui.spacing_mut().scroll.bar_width = 3.0;
+
             let total_w = ui.available_width().max(320.0);
-            let controls_w = 304.0_f32.min(total_w * 0.44);
+            let controls_w = 248.0_f32.min((total_w - 140.0).max(210.0));
             let stats_w = (total_w - controls_w - 10.0).max(120.0);
 
-            ui.horizontal(|ui| {
+            ui.horizontal_centered(|ui| {
                 // Bloque izquierdo desplazable: Escudo nacional + cajas de métricas tácticas
                 ui.allocate_ui_with_layout(
                     Vec2::new(stats_w, 36.0),
-                    egui::Layout::left_to_right(egui::Align::Center),
+                    egui::Layout::top_down(egui::Align::Min),
                     |ui| {
+                        ui.set_max_height(36.0);
                         egui::ScrollArea::horizontal()
                             .id_salt("top_hud_scroll")
+                            .max_height(36.0)
                             .auto_shrink([false, true])
                             .show(ui, |ui| {
-                                ui.horizontal(|ui| {
+                                ui.horizontal_centered(|ui| {
+                                    ui.spacing_mut().item_spacing.x = 5.0;
                                     if let Some(pid) = &state.player_country_id {
                                         if let Some(c) = state.countries.get(pid) {
                                             draw_country_shield(ui, Vec2::new(34.0, 28.0), c);
@@ -49,7 +55,7 @@ pub fn render_top_hud(ui: &mut Ui, state: &GameState, sim_busy: bool) -> TopBarA
                                                 ui.label(
                                                     RichText::new(c.name.to_uppercase())
                                                         .strong()
-                                                        .size(13.0)
+                                                        .size(12.5)
                                                         .color(ACCENT_GOLD),
                                                 );
                                                 if let Some(ruling) = c.ruling_party() {
@@ -58,12 +64,12 @@ pub fn render_top_hud(ui: &mut Ui, state: &GameState, sim_busy: bool) -> TopBarA
                                                             "{} • {}",
                                                             ruling.acronym, ruling.ideology
                                                         ))
-                                                        .size(10.0)
+                                                        .size(9.5)
                                                         .color(TEXT_MUTED),
                                                     );
                                                 }
                                             });
-                                            ui.add_space(4.0);
+                                            ui.add_space(3.0);
 
                                             stat_slot(
                                                 ui,
@@ -101,29 +107,42 @@ pub fn render_top_hud(ui: &mut Ui, state: &GameState, sim_busy: bool) -> TopBarA
                                                     ACCENT_CRIMSON
                                                 },
                                             );
+                                            stat_slot(
+                                                ui,
+                                                GameIcon::Companies,
+                                                "DESEMPLEO",
+                                                &format!("{:.1}%", c.economy.unemployment_pct),
+                                                if c.economy.unemployment_pct <= 8.0 {
+                                                    ACCENT_EMERALD
+                                                } else {
+                                                    ACCENT_CRIMSON
+                                                },
+                                            );
 
-                                            well_frame().show(ui, |ui| {
-                                                ui.vertical(|ui| {
-                                                    ui.spacing_mut().item_spacing.y = 1.0;
-                                                    ui.label(
-                                                        RichText::new("ESTABILIDAD")
-                                                            .size(9.5)
-                                                            .color(TEXT_MUTED),
-                                                    );
-                                                    draw_gauge_bar(
-                                                        ui,
-                                                        68.0,
-                                                        13.0,
-                                                        (c.stability / 100.0) as f32,
-                                                        if c.stability >= 55.0 {
-                                                            ACCENT_EMERALD
-                                                        } else {
-                                                            ACCENT_CRIMSON
-                                                        },
-                                                        &format!("{:.0}%", c.stability),
-                                                    );
+                                            well_frame()
+                                                .inner_margin(Margin::symmetric(7, 3))
+                                                .show(ui, |ui| {
+                                                    ui.vertical(|ui| {
+                                                        ui.spacing_mut().item_spacing.y = 1.0;
+                                                        ui.label(
+                                                            RichText::new("ESTABILIDAD")
+                                                                .size(9.0)
+                                                                .color(TEXT_MUTED),
+                                                        );
+                                                        draw_gauge_bar(
+                                                            ui,
+                                                            68.0,
+                                                            13.0,
+                                                            (c.stability / 100.0) as f32,
+                                                            if c.stability >= 55.0 {
+                                                                ACCENT_EMERALD
+                                                            } else {
+                                                                ACCENT_CRIMSON
+                                                            },
+                                                            &format!("{:.0}%", c.stability),
+                                                        );
+                                                    });
                                                 });
-                                            });
                                         }
                                     }
                                 });
@@ -131,25 +150,13 @@ pub fn render_top_hud(ui: &mut Ui, state: &GameState, sim_busy: bool) -> TopBarA
                     },
                 );
 
-                // Bloque derecho fijado: Cronómetro, Pausa/Play, Velocidad [1x][2x][3x] y Siguiente Mes
+                // Bloque derecho fijado: Reloj en tiempo real, Pausa/Play y Velocidad [1x][2x][3x]
                 ui.allocate_ui_with_layout(
                     Vec2::new(controls_w, 36.0),
                     egui::Layout::right_to_left(egui::Align::Center),
                     |ui| {
-                        let next_lbl = if sim_busy { "..." } else { "+1 MES" };
-                        if game_button(
-                            ui,
-                            Vec2::new(76.0, 32.0),
-                            next_lbl,
-                            Some(GameIcon::NextTurn),
-                            !sim_busy,
-                            Some(ACCENT_GOLD),
-                        )
-                        .clicked()
-                            && !sim_busy
-                        {
-                            action = TopBarAction::AdvanceOneTurn;
-                        }
+                        ui.set_max_height(36.0);
+                        ui.spacing_mut().item_spacing.x = 5.0;
 
                         for spd in [3_u8, 2, 1] {
                             let selected = state.speed_level == spd;
@@ -185,22 +192,33 @@ pub fn render_top_hud(ui: &mut Ui, state: &GameState, sim_busy: bool) -> TopBarA
                             action = TopBarAction::TogglePause;
                         }
 
-                        well_frame().show(ui, |ui| {
-                            ui.vertical(|ui| {
-                                ui.spacing_mut().item_spacing.y = 0.0;
-                                ui.label(
-                                    RichText::new(state.date_label().to_uppercase())
-                                        .strong()
-                                        .size(12.0)
-                                        .color(ACCENT_GOLD),
-                                );
-                                ui.label(
-                                    RichText::new(format!("TURNO {}", state.turn))
-                                        .size(9.5)
-                                        .color(TEXT_MUTED),
-                                );
+                        well_frame()
+                            .inner_margin(Margin::symmetric(8, 3))
+                            .show(ui, |ui| {
+                                ui.vertical(|ui| {
+                                    ui.spacing_mut().item_spacing.y = 0.0;
+                                    ui.label(
+                                        RichText::new(state.date_label().to_uppercase())
+                                            .strong()
+                                            .size(11.5)
+                                            .color(ACCENT_GOLD),
+                                    );
+                                    let status_lbl = if state.paused {
+                                        format!("DÍA {} • PAUSA", state.total_days)
+                                    } else {
+                                        format!("DÍA {} • EN VIVO", state.total_days)
+                                    };
+                                    ui.label(
+                                        RichText::new(status_lbl)
+                                            .size(9.0)
+                                            .color(if state.paused {
+                                                TEXT_MUTED
+                                            } else {
+                                                ACCENT_EMERALD
+                                            }),
+                                    );
+                                });
                             });
-                        });
                     },
                 );
             });
@@ -210,17 +228,20 @@ pub fn render_top_hud(ui: &mut Ui, state: &GameState, sim_busy: bool) -> TopBarA
 }
 
 fn stat_slot(ui: &mut Ui, icon: GameIcon, label: &str, value: &str, color: Color32) {
-    well_frame().show(ui, |ui| {
-        ui.horizontal(|ui| {
-            let (ic_rect, _) = ui.allocate_exact_size(Vec2::splat(14.0), Sense::hover());
-            paint_icon(ui.painter(), ic_rect, icon, color);
-            ui.vertical(|ui| {
-                ui.spacing_mut().item_spacing.y = 0.0;
-                ui.label(RichText::new(label).size(9.5).color(TEXT_MUTED));
-                ui.label(RichText::new(value).strong().size(11.5).color(color));
+    well_frame()
+        .inner_margin(Margin::symmetric(7, 3))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                let (ic_rect, _) = ui.allocate_exact_size(Vec2::splat(13.0), Sense::hover());
+                paint_icon(ui.painter(), ic_rect, icon, color);
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    ui.label(RichText::new(label).size(9.0).color(TEXT_MUTED));
+                    ui.label(RichText::new(value).strong().size(11.0).color(color));
+                });
             });
         });
-    });
 }
 
 /// Barra inferior horizontal con botones táctiles remachados e íconos para cambiar entre pantallas.
@@ -229,6 +250,7 @@ pub fn render_bottom_nav(ui: &mut Ui, current: ScreenRoute) -> Option<ScreenRout
     let tabs = [
         (ScreenRoute::WorldMap, GameIcon::Map, "Mapa"),
         (ScreenRoute::Economy, GameIcon::Economy, "Economía"),
+        (ScreenRoute::Companies, GameIcon::Companies, "Empresas"),
         (ScreenRoute::Politics, GameIcon::Politics, "Política"),
         (ScreenRoute::Diplomacy, GameIcon::Diplomacy, "Diplomacia"),
         (ScreenRoute::Military, GameIcon::Military, "Defensa"),
@@ -236,12 +258,15 @@ pub fn render_bottom_nav(ui: &mut Ui, current: ScreenRoute) -> Option<ScreenRout
     ];
 
     panel_frame(false)
-        .inner_margin(Margin::symmetric(8, 5))
+        .inner_margin(Margin::symmetric(8, 4))
         .show(ui, |ui| {
+            ui.set_height(36.0);
+            ui.spacing_mut().scroll.bar_width = 3.0;
             let avail_w = ui.available_width().max(320.0);
-            let tab_w = ((avail_w - 42.0) / 6.0).clamp(96.0, 152.0);
+            let tab_w = ((avail_w - 48.0) / 7.0).clamp(90.0, 140.0);
             egui::ScrollArea::horizontal()
                 .id_salt("bottom_nav_scroll")
+                .max_height(36.0)
                 .auto_shrink([false, true])
                 .show(ui, |ui| {
                     ui.horizontal_centered(|ui| {
@@ -249,7 +274,7 @@ pub fn render_bottom_nav(ui: &mut Ui, current: ScreenRoute) -> Option<ScreenRout
                             let active = current == route;
                             if game_button(
                                 ui,
-                                Vec2::new(tab_w, 34.0),
+                                Vec2::new(tab_w, 33.0),
                                 title,
                                 Some(icon),
                                 active,

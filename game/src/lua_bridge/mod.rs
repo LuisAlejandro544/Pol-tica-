@@ -7,8 +7,8 @@
 
 use crate::map::svg_loader::ASSETS_DIR;
 use crate::models::{
-    AiPersonality, CapitalMarkerData, CountryState, EconomyState, EventOption, GameEvent,
-    MilitaryState, PoliticalParty, ProvinceData,
+    AiPersonality, CapitalMarkerData, CompanyCategory, CompanyCategoryTemplate, CountryState,
+    EconomyState, EventOption, GameEvent, MilitaryState, PoliticalParty, ProvinceData,
 };
 use mlua::{Function, Lua, Table};
 use std::collections::BTreeMap;
@@ -97,6 +97,12 @@ impl LuaEngine {
                 _ => AiPersonality::Diplomatico,
             };
 
+            let active_troops: u64 = row.get("active_troops")?;
+            let inflation_pct: f64 = row.get("inflation_pct")?;
+            let gdp_growth_pct: f64 = row.get("gdp_growth_pct")?;
+            let initial_unemp = (6.4 + inflation_pct * 0.12 - gdp_growth_pct * 0.35).clamp(3.8, 14.5);
+            let initial_upkeep = (active_troops as f64 / 1_000.0) * 1.35;
+
             let state = CountryState {
                 id: id.clone(),
                 name: row.get("name")?,
@@ -111,9 +117,9 @@ impl LuaEngine {
                     currency_code: row.get("currency_code")?,
                     currency_name: row.get("currency_name")?,
                     exchange_rate_usd: row.get("exchange_rate_usd")?,
-                    inflation_pct: row.get("inflation_pct")?,
+                    inflation_pct,
                     gdp_usd_millions: row.get("gdp_usd_millions")?,
-                    gdp_growth_pct: row.get("gdp_growth_pct")?,
+                    gdp_growth_pct,
                     debt_to_gdp_pct: row.get("debt_to_gdp_pct")?,
                     treasury_usd_millions: row.get("treasury_usd_millions")?,
                     tax_rate_pct: row.get("tax_rate_pct")?,
@@ -121,9 +127,12 @@ impl LuaEngine {
                     infra_investment_pct: 3.5,
                     social_investment_pct: 4.5,
                     last_monthly_balance: 0.0,
+                    troop_upkeep_usd_millions: initial_upkeep,
+                    unemployment_pct: initial_unemp,
+                    corporate_gdp_bonus_m: 0.0,
                 },
                 military: MilitaryState {
-                    active_troops: row.get("active_troops")?,
+                    active_troops,
                     defense_budget_pct: row.get("defense_budget_pct")?,
                     readiness: 72.0,
                 },
@@ -136,6 +145,48 @@ impl LuaEngine {
         }
 
         Ok(countries)
+    }
+
+    /// Carga las categorías y productos empresariales desde `scripts/companies_latam.lua`.
+    pub fn load_company_catalog(&self) -> Result<Vec<CompanyCategoryTemplate>, LuaBridgeError> {
+        let src = Self::read_script("scripts/companies_latam.lua")?;
+        let root: Table = self.lua.load(src).eval()?;
+        let cats_tbl: Table = root.get("categories")?;
+        let mut templates = Vec::new();
+
+        for item in cats_tbl.sequence_values::<Table>() {
+            let ct = item?;
+            let id: String = ct.get("id")?;
+            let mut prefixes = Vec::new();
+            for p in ct.get::<Table>("prefixes")?.sequence_values::<String>() {
+                prefixes.push(p?);
+            }
+            let mut suffixes = Vec::new();
+            for s in ct.get::<Table>("suffixes")?.sequence_values::<String>() {
+                suffixes.push(s?);
+            }
+            let mut products = Vec::new();
+            for pr in ct.get::<Table>("products")?.sequence_values::<String>() {
+                products.push(pr?);
+            }
+
+            templates.push(CompanyCategoryTemplate {
+                category: CompanyCategory::from_lua_id(&id),
+                id,
+                prefixes,
+                suffixes,
+                products,
+                base_price_min: ct.get("base_price_min")?,
+                base_price_max: ct.get("base_price_max")?,
+                jobs_min: ct.get("jobs_min")?,
+                jobs_max: ct.get("jobs_max")?,
+                gdp_per_job_m: ct.get("gdp_per_job_m")?,
+                inflation_sensitivity: ct.get("inflation_sensitivity")?,
+                rate_sensitivity: ct.get("rate_sensitivity")?,
+            });
+        }
+
+        Ok(templates)
     }
 
     /// Carga el catálogo de provincias y capitales generado por Blender desde `scripts/provinces_latam.lua`.
@@ -194,11 +245,16 @@ impl LuaEngine {
     }
 
     /// Ejecuta un paso económico y político mensual para un país usando `scripts/game_rules.lua`.
-    pub fn step_country_via_lua(&self, country: &mut CountryState) -> Result<(), LuaBridgeError> {
+    pub fn step_country_via_lua(
+        &self,
+        country: &mut CountryState,
+        corporate_gdp_bonus_m: f64,
+        corporate_jobs_total: u64,
+    ) -> Result<(), LuaBridgeError> {
         let rules_src = Self::read_script("scripts/game_rules.lua")?;
         let rules_tbl: Table = self.lua.load(rules_src).eval()?;
 
-        // 1. Cálculo macroeconómico en Lua 5.4
+        // 1. Cálculo macroeconómico en Lua 5.4 (incluye mantenimiento militar, empresas y desempleo)
         let econ_fn: Function = rules_tbl.get("calculate_monthly_economy")?;
         let econ_in = self.lua.create_table()?;
         econ_in.set("currency_code", country.economy.currency_code.as_str())?;
@@ -214,6 +270,11 @@ impl LuaEngine {
         econ_in.set("infra_investment_pct", country.economy.infra_investment_pct)?;
         econ_in.set("social_investment_pct", country.economy.social_investment_pct)?;
         econ_in.set("stability", country.stability)?;
+        econ_in.set("active_troops", country.military.active_troops)?;
+        econ_in.set("unemployment_pct", country.economy.unemployment_pct)?;
+        econ_in.set("corporate_gdp_bonus_m", corporate_gdp_bonus_m)?;
+        econ_in.set("corporate_jobs_total", corporate_jobs_total)?;
+        econ_in.set("population", country.population)?;
 
         let econ_out: Table = econ_fn.call(econ_in)?;
         country.economy.gdp_usd_millions = econ_out.get("gdp_usd_millions")?;
@@ -223,6 +284,9 @@ impl LuaEngine {
         country.economy.treasury_usd_millions = econ_out.get("treasury_usd_millions")?;
         country.economy.debt_to_gdp_pct = econ_out.get("debt_to_gdp_pct")?;
         country.economy.last_monthly_balance = econ_out.get("monthly_net_balance")?;
+        country.economy.troop_upkeep_usd_millions = econ_out.get("troop_upkeep_m")?;
+        country.economy.unemployment_pct = econ_out.get("unemployment_pct")?;
+        country.economy.corporate_gdp_bonus_m = corporate_gdp_bonus_m;
 
         // 2. Cálculo de aprobación política y estabilidad en Lua 5.4
         let ruling_approval = country
@@ -238,6 +302,7 @@ impl LuaEngine {
         pol_in.set("tax_rate_pct", country.economy.tax_rate_pct)?;
         pol_in.set("ruling_approval_pct", ruling_approval)?;
         pol_in.set("stability", country.stability)?;
+        pol_in.set("unemployment_pct", country.economy.unemployment_pct)?;
 
         let pol_out: Table = pol_fn.call(pol_in)?;
         let new_ruling_approval: f64 = pol_out.get("ruling_approval_pct")?;

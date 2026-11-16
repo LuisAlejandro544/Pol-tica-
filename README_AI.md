@@ -9,8 +9,8 @@ Si eres un modelo o agente que acaba de abrir este repositorio, lee esto antes d
 | Qué | Dónde | Para qué |
 | :--- | :--- | :--- |
 | Host web AI Studio | `/src/App.tsx` | Debe mostrar **solo `Hello World`** para que el contenedor Vite compile limpio. |
-| Motor Rust + UI | `/game/src/` | Juego móvil horizontal en Rust (`egui`/`eframe` → migrando a `wgpu` + `gltf`) + IA paralela (`rayon`). |
-| Scripts Lua 5.4 | `/game/assets/scripts/` | Datos de países, provincias, reglas económicas y eventos (`countries_latam.lua`, `game_rules.lua`, `events_latam.lua`). |
+| Motor Rust + UI | `/game/src/` | Juego móvil horizontal en tiempo real en Rust (`egui`/`eframe` + `wgpu` + `gltf`), tropas por estados e IA paralela (`rayon`). |
+| Scripts Lua 5.4 | `/game/assets/scripts/` | Datos de países, provincias, empresas/sectores (`companies_latam.lua`), reglas económicas (`game_rules.lua`) y eventos (`events_latam.lua`). |
 | Pipeline Blender 3D | `/game/tools/blender/` | Convierte GeoJSON Natural Earth a `latinoamerica_3d.glb` + `provinces_latam.lua` usando `bpy` y `lua5.4`. |
 | Action Blender manual | `/.github/workflows/build_blender_latam_map.yml` | **Solo manual (`workflow_dispatch`)**. No agregar triggers automáticos. |
 | Empaquetado Android | `/game/android/` | APK puro sin Kotlin (`NativeActivity`), listo para Uptodown. |

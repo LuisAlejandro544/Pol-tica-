@@ -5,6 +5,7 @@
 //! selección táctil exacta 3D mediante raycasting Möller-Trumbore.
 
 use crate::map::svg_loader::ASSETS_DIR;
+use crate::models::{ProvinceData, ProvinceGraph, ProvinceNode};
 use bytemuck::{Pod, Zeroable};
 use glam::{Mat3, Mat4, Vec3};
 use gltf::mesh::util::{ReadColors, ReadIndices};
@@ -152,6 +153,98 @@ impl Latam3dScene {
         } else {
             None
         }
+    }
+
+    /// Construye el grafo de estados/provincias con posición 3D y vecinos adyacentes para marcha militar.
+    pub fn build_province_graph(&self, catalog: &BTreeMap<String, ProvinceData>) -> ProvinceGraph {
+        let mut graph = ProvinceGraph::new();
+        let n = self.pick_meshes.len();
+        if n == 0 {
+            return graph;
+        }
+
+        let mut adj: Vec<Vec<String>> = vec![Vec::new(); n];
+        let pad = 0.45_f32;
+
+        for i in 0..n {
+            let a = &self.pick_meshes[i];
+            for j in (i + 1)..n {
+                let b = &self.pick_meshes[j];
+                let overlap_x = a.aabb_min.x - pad <= b.aabb_max.x + pad
+                    && a.aabb_max.x + pad >= b.aabb_min.x - pad;
+                let overlap_z = a.aabb_min.z - pad <= b.aabb_max.z + pad
+                    && a.aabb_max.z + pad >= b.aabb_min.z - pad;
+                let dist_xz = ((a.center.x - b.center.x).powi(2)
+                    + (a.center.z - b.center.z).powi(2))
+                .sqrt();
+                if (overlap_x && overlap_z) || dist_xz < 1.8 {
+                    adj[i].push(b.mesh_name.clone());
+                    adj[j].push(a.mesh_name.clone());
+                }
+            }
+        }
+
+        // Garantizar que ninguna provincia quede aislada respecto a su propio país (islas o mallas separadas)
+        for i in 0..n {
+            let a = &self.pick_meshes[i];
+            let has_same_country = adj[i].iter().any(|nb| {
+                self.pick_meshes
+                    .iter()
+                    .find(|m| m.mesh_name == *nb)
+                    .map(|m| m.country_id == a.country_id)
+                    .unwrap_or(false)
+            });
+            if !has_same_country {
+                let mut best_j = None;
+                let mut best_dist = f32::INFINITY;
+                for j in 0..n {
+                    if i == j || self.pick_meshes[j].country_id != a.country_id {
+                        continue;
+                    }
+                    let d = (a.center - self.pick_meshes[j].center).length_squared();
+                    if d < best_dist {
+                        best_dist = d;
+                        best_j = Some(j);
+                    }
+                }
+                if let Some(j) = best_j {
+                    let b_name = self.pick_meshes[j].mesh_name.clone();
+                    let a_name = a.mesh_name.clone();
+                    if !adj[i].contains(&b_name) {
+                        adj[i].push(b_name);
+                    }
+                    if !adj[j].contains(&a_name) {
+                        adj[j].push(a_name);
+                    }
+                }
+            }
+        }
+
+        for (i, pm) in self.pick_meshes.iter().enumerate() {
+            let meta = catalog.get(&pm.mesh_name);
+            let name = meta
+                .map(|m| m.name.clone())
+                .unwrap_or_else(|| pm.mesh_name.clone());
+            let terrain_type = meta
+                .map(|m| m.terrain_type.clone())
+                .unwrap_or_else(|| "Llanura".to_string());
+            let elevation_avg = meta.map(|m| m.elevation_avg).unwrap_or(0.2);
+
+            graph.insert(
+                pm.mesh_name.clone(),
+                ProvinceNode {
+                    mesh_name: pm.mesh_name.clone(),
+                    country_id: pm.country_id.clone(),
+                    name,
+                    world_pos: [pm.center.x, pm.center.y + 0.35, pm.center.z],
+                    terrain_type,
+                    elevation_avg,
+                    neighbors: std::mem::take(&mut adj[i]),
+                },
+            );
+        }
+
+        graph
     }
 
     /// Raycasting exacto 3D (AABB + Möller-Trumbore) para detectar la provincia bajo el toque.

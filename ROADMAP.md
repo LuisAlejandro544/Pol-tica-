@@ -23,11 +23,15 @@ Este documento describe la evolución planificada del proyecto desde el prototip
 - [x] Reemplazar el backend `eframe/glow` por `eframe` con `wgpu` (`egui-wgpu`) sobre Vulkan/GLES en Android.
 - [x] Cargar `latinoamerica_3d.glb` con `gltf`, renderizar relieve andino, iluminación direccional, fronteras, ríos y capitales.
 - [x] Implementar selección táctil 3D (*raycasting* Möller-Trumbore con `glam`) sobre las mallas `PROV_*`.
-- [ ] Expandir el modelo de datos en Rust/Lua para gestionar economía, población e infraestructura a nivel de **provincia**.
+- [x] Migrar el bucle de turnos a **simulación continua en tiempo real** (`1x` / `2x` / `3x` / pausa) con flujo diario de caja.
+- [x] Construir grafo de adyacencia provincial (`ProvinceGraph`) para reclutar y mover unidades militares (`ArmyUnit`) por los estados en tiempo real, con impacto directo de mantenimiento en ingresos.
+- [x] Integrar fundación aleatoria de empresas privadas por categorías (`companies_latam.lua`), precios de acción en vivo, reducción de desempleo y aporte al PIB.
+- [ ] Expandir el modelo de datos en Rust/Lua para gestionar infraestructura e impuestos específicos a nivel de **provincia**.
 - [ ] Evaluar migración de arquitectura principal exclusiva a **64 bits (`arm64-v8a`)** conforme crezca la complejidad de mallas 3D y memoria.
 
 ## Fase 4 — Profundidad Estratégica y Militar
-- [ ] Grafo de adyacencia provincial (`petgraph` / `pathfinding`) para movimiento de ejércitos, logística y rutas comerciales.
+- [ ] Combate táctico automático entre divisiones enemigas al coincidir en provincias disputadas, logística y suministro.
+- [ ] Árbol de Enfoque nacional/regional en Lua 5.4 con pantalla dedicada y efectos progresivos.
 - [ ] Sistema profundo de coaliciones parlamentarias, mociones de censura, proyectos de ley y bancos centrales.
 - [ ] Guardado binario comprimido (`postcard` + `lz4_flex`) para campañas largas de varias décadas.
 - [ ] Publicación de APK estable en tiendas de terceros (Uptodown).

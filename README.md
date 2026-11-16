@@ -9,12 +9,13 @@ Videojuego móvil de gran estrategia en **formato horizontal (`sensorLandscape`)
 ## Características principales
 
 - **Cero Kotlin en la app:** Entrada nativa Android mediante `android.app.NativeActivity` (`android-activity`) y `hasCode="false"`.
-- **Interfaz y motor pesado en Rust:** `egui` / `eframe` preparando transición gráfica 3D hacia `wgpu` + `egui-wgpu` + `egui-winit` + `gltf`.
-- **Scripting en Lua 5.4 (`mlua` vendored):** Catálogo de las 21 naciones latinoamericanas, fórmulas macroeconómicas, inflación, moneda nacional, PIB, partidos políticos y eventos dinámicos.
+- **Simulación continua en tiempo real:** Calendario diario (`1x`, `2x`, `3x` y pausa), caja diaria en vivo, marcha interpolada de tropas sobre el mapa 3D y cierres macroeconómicos mensuales.
+- **Interfaz y motor pesado en Rust:** `egui` / `eframe` + `wgpu 25` + `gltf 1.4` con arquitectura multipantalla táctil (`Mapa`, `Economía`, `Empresas`, `Política`, `Diplomacia`, `Defensa`, `Opciones`).
+- **Reclutamiento y movimiento militar por estados:** Tanto el jugador como la IA reclutan divisiones en estados concretos (con costo inicial y reducción continua de ingresos netos por mantenimiento) y las desplazan en tiempo real por el grafo de provincias.
+- **Empresas aleatorias, bolsa y desempleo:** Catálogo Lua (`companies_latam.lua`) con sectores, productos vendidos, precios de acción en vivo con gráfica histórica, creación de empleo (bajando el desempleo) y aporte directo al PIB.
+- **Scripting en Lua 5.4 (`mlua` vendored):** Catálogo de las 21 naciones latinoamericanas, fórmulas macroeconómicas, inflación, moneda nacional, desempleo, mantenimiento militar, partidos políticos y eventos dinámicos.
 - **IA Local paralela en Rust (`rayon` + `crossbeam-channel`):** Evalúa a las naciones rivales en un hilo secundario sin bloquear la fluidez de la interfaz táctil.
-- **Mapa vectorial SVG + Pipeline 3D Blender (`.glb`):**
-  - Mapa base actual en `/game/assets/maps/latinoamerica.svg` con 21 países.
-  - Generador 3D en Blender (`/game/tools/blender/build_latam_map.py`) usando GeoJSON de Dominio Público (Natural Earth Admin-1 provincias y capitales), sincronizado con Lua 5.4 (`/game/tools/blender/sync_lua_metadata.lua`).
+- **Mapa 3D Blender (`.glb`) y Pipeline GeoJSON:** Generador 3D en Blender (`/game/tools/blender/build_latam_map.py`) usando GeoJSON de Dominio Público (Natural Earth Admin-1 provincias y capitales), sincronizado con Lua 5.4 (`/game/tools/blender/sync_lua_metadata.lua`).
 - **Distribución directa APK (sin Google Play):** Configurado para generar APK instalable para tiendas de terceros como Uptodown.
 
 ---

@@ -58,6 +58,7 @@ pub enum GameIcon {
     Camera3D,
     Center,
     Dispatch,
+    Companies,
 }
 
 /// Aplica la estética de Gran Estrategia (esquinas mecanizadas, alto contraste, botones con cuerpo) al contexto `egui`.
@@ -216,36 +217,72 @@ pub fn game_button(
         p.hline((rect.left() + 3.0)..=(rect.right() - 3.0), top_y, Stroke::new(1.0_f32, bevel_col));
 
         let fg = if active { TEXT_DARK } else { TEXT_PRIMARY };
-        let font_size = if size.y >= 38.0 { 13.5 } else { 12.5 };
+        let mut font_size = if size.y >= 38.0 { 13.5 } else { 12.0 };
+        let clipped = p.with_clip_rect(rect.shrink(2.0));
 
         if let Some(ic) = icon {
-            let ic_size = (size.y * 0.48).clamp(12.0, 17.0);
+            let ic_size = (size.y * 0.46).clamp(11.0, 16.0);
+            let ic_col = if active {
+                TEXT_DARK
+            } else {
+                accent.unwrap_or(ACCENT_GOLD)
+            };
             if label.is_empty() {
                 let ic_rect = Rect::from_center_size(rect.center(), Vec2::splat(ic_size));
-                paint_icon(p, ic_rect, ic, fg);
+                paint_icon(&clipped, ic_rect, ic, fg);
             } else {
+                let gap = 5.0_f32;
+                let max_text_w = (rect.width() - ic_size - gap - 12.0).max(16.0);
+                let mut galley = clipped.layout_no_wrap(
+                    label.to_owned(),
+                    FontId::proportional(font_size),
+                    fg,
+                );
+                if galley.size().x > max_text_w {
+                    font_size = (font_size - 1.5).max(10.0);
+                    galley = clipped.layout_no_wrap(
+                        label.to_owned(),
+                        FontId::proportional(font_size),
+                        fg,
+                    );
+                }
+                let content_w = ic_size + gap + galley.size().x;
+                let start_x = if size.x <= 135.0 {
+                    (rect.center().x - content_w * 0.5).max(rect.left() + 6.0)
+                } else {
+                    rect.left() + 10.0
+                };
                 let ic_rect = Rect::from_center_size(
-                    Pos2::new(rect.left() + 14.0 + ic_size * 0.35, rect.center().y),
+                    Pos2::new(start_x + ic_size * 0.5, rect.center().y),
                     Vec2::splat(ic_size),
                 );
-                paint_icon(p, ic_rect, ic, if active { TEXT_DARK } else { accent.unwrap_or(ACCENT_GOLD) });
-                let text_pos = Pos2::new(ic_rect.right() + 7.0, rect.center().y);
-                p.text(
-                    text_pos,
-                    Align2::LEFT_CENTER,
-                    label,
+                paint_icon(&clipped, ic_rect, ic, ic_col);
+                let text_pos = Pos2::new(
+                    ic_rect.right() + gap,
+                    rect.center().y - galley.size().y * 0.5,
+                );
+                clipped.galley(text_pos, galley, fg);
+            }
+        } else {
+            let max_text_w = (rect.width() - 8.0).max(12.0);
+            let mut galley = clipped.layout_no_wrap(
+                label.to_owned(),
+                FontId::proportional(font_size),
+                fg,
+            );
+            if galley.size().x > max_text_w {
+                font_size = (font_size - 1.5).max(10.0);
+                galley = clipped.layout_no_wrap(
+                    label.to_owned(),
                     FontId::proportional(font_size),
                     fg,
                 );
             }
-        } else {
-            p.text(
-                rect.center(),
-                Align2::CENTER_CENTER,
-                label,
-                FontId::proportional(font_size),
-                fg,
+            let text_pos = Pos2::new(
+                rect.center().x - galley.size().x * 0.5,
+                rect.center().y - galley.size().y * 0.5,
             );
+            clipped.galley(text_pos, galley, fg);
         }
     }
     response
@@ -524,6 +561,21 @@ pub fn paint_icon(p: &egui::Painter, rect: Rect, icon: GameIcon, color: Color32)
             );
             p.hline((c.x - r * 0.45)..=(c.x + r * 0.45), c.y - r * 0.3, stroke);
             p.hline((c.x - r * 0.45)..=(c.x + r * 0.45), c.y + r * 0.2, stroke);
+        }
+        GameIcon::Companies => {
+            p.rect_stroke(
+                Rect::from_center_size(Pos2::new(c.x, c.y + r * 0.12), Vec2::new(r * 1.6, r * 1.25)),
+                CornerRadius::same(2),
+                stroke,
+                egui::StrokeKind::Inside,
+            );
+            p.rect_stroke(
+                Rect::from_center_size(Pos2::new(c.x, c.y - r * 0.58), Vec2::new(r * 0.72, r * 0.36)),
+                CornerRadius::same(1),
+                stroke,
+                egui::StrokeKind::Inside,
+            );
+            p.hline((c.x - r * 0.55)..=(c.x + r * 0.55), c.y + r * 0.08, stroke);
         }
     }
 }

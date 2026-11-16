@@ -1,6 +1,7 @@
 //! Propósito del archivo:
 //! Registra y exporta todas las pantallas independientes de la interfaz horizontal.
 
+pub mod companies_screen;
 pub mod country_select;
 pub mod diplomacy_screen;
 pub mod economy_screen;

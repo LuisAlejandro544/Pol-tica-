@@ -6,18 +6,23 @@
 use crate::models::GameState;
 use crate::ui::theme::{
     card_frame, draw_country_shield, draw_gauge_bar, draw_section_header, format_usd_millions,
-    panel_frame, step_button, well_frame, GameIcon, ACCENT_CRIMSON, ACCENT_CYAN, ACCENT_EMERALD,
-    ACCENT_GOLD, BORDER_BRASS_DIM, TEXT_MUTED, TEXT_PRIMARY,
+    game_button, panel_frame, step_button, well_frame, GameIcon, ACCENT_CRIMSON, ACCENT_CYAN,
+    ACCENT_EMERALD, ACCENT_GOLD, BORDER_BRASS_DIM, TEXT_MUTED, TEXT_PRIMARY,
 };
 use egui::{RichText, Ui, Vec2};
 
-pub fn render_economy_screen(ui: &mut Ui, state: &mut GameState) {
+pub fn render_economy_screen(ui: &mut Ui, state: &mut GameState) -> bool {
+    let mut open_companies = false;
     let Some(pid) = state.player_country_id.clone() else {
         ui.label("Selecciona un país primero.");
-        return;
+        return false;
     };
+    let corp_count = state.companies.iter().filter(|c| c.country_id == pid).count();
+    let corp_jobs = state.country_company_jobs(&pid);
+    let corp_gdp = state.country_company_gdp_bonus(&pid);
+
     let Some(country) = state.countries.get_mut(&pid) else {
-        return;
+        return false;
     };
 
     let shield_country = country.clone();
@@ -122,7 +127,7 @@ pub fn render_economy_screen(ui: &mut Ui, state: &mut GameState) {
                             ));
                             ui.label(
                                 RichText::new(format!(
-                                    "Balance Último Mes: {:+.1} M USD",
+                                    "Balance Neto Mensual: {:+.1} M USD",
                                     country.economy.last_monthly_balance
                                 ))
                                 .strong()
@@ -132,7 +137,43 @@ pub fn render_economy_screen(ui: &mut Ui, state: &mut GameState) {
                                     ACCENT_CRIMSON
                                 }),
                             );
+                            ui.label(
+                                RichText::new(format!(
+                                    "Mantenimiento Militar: -${:.2} M USD/mes",
+                                    country.economy.troop_upkeep_usd_millions
+                                ))
+                                .size(11.5)
+                                .color(ACCENT_CRIMSON),
+                            );
+                            ui.label(
+                                RichText::new(format!(
+                                    "Sector Privado: {} empresas ({} empleos | +{} PIB/año)",
+                                    corp_count,
+                                    corp_jobs,
+                                    format_usd_millions(corp_gdp)
+                                ))
+                                .size(11.5)
+                                .color(ACCENT_CYAN),
+                            );
                         });
+                        ui.add_space(6.0);
+                        ui.label(
+                            RichText::new("Tasa de Desempleo Nacional")
+                                .size(11.5)
+                                .color(TEXT_MUTED),
+                        );
+                        draw_gauge_bar(
+                            ui,
+                            ui.available_width(),
+                            18.0,
+                            (country.economy.unemployment_pct / 25.0) as f32,
+                            if country.economy.unemployment_pct > 9.5 {
+                                ACCENT_CRIMSON
+                            } else {
+                                ACCENT_EMERALD
+                            },
+                            &format!("{:.1}% Desempleo", country.economy.unemployment_pct),
+                        );
                         ui.add_space(6.0);
                         ui.label(
                             RichText::new("Deuda Pública / PIB")
@@ -151,6 +192,19 @@ pub fn render_economy_screen(ui: &mut Ui, state: &mut GameState) {
                             },
                             &format!("{:.1}% PIB", country.economy.debt_to_gdp_pct),
                         );
+                        ui.add_space(8.0);
+                        if game_button(
+                            ui,
+                            Vec2::new(ui.available_width(), 36.0),
+                            "Ver Bolsa y Empresas Nacionales >",
+                            Some(GameIcon::Companies),
+                            true,
+                            Some(ACCENT_GOLD),
+                        )
+                        .clicked()
+                        {
+                            open_companies = true;
+                        }
                     });
                 });
 
@@ -217,6 +271,8 @@ pub fn render_economy_screen(ui: &mut Ui, state: &mut GameState) {
                 });
             });
         });
+
+    open_companies
 }
 
 #[allow(clippy::too_many_arguments)]

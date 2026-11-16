@@ -1,30 +1,32 @@
 //! Propósito del archivo:
 //! Coordinador raíz de la interfaz móvil en Rust (`HorizonteLatamApp`).
 //! Conecta `eframe::App` (`wgpu`) con el `SimulationWorker` en segundo plano mediante
-//! canales sin bloqueo (`crossbeam_channel`), carga el modelo 3D (`latinoamerica_3d.glb`)
-//! y el catálogo provincial Lua 5.4 (`provinces_latam.lua`), y gestiona la navegación
-//! multipantalla y los popups de eventos.
+//! canales sin bloqueo (`crossbeam_channel`), gestiona la simulación continua en tiempo real,
+//! coordina la pantalla de Empresas/Bolsa, el reclutamiento y marcha de tropas por estados
+//! y los popups de eventos geopolíticos.
 
 pub mod components;
 pub mod screens;
 pub mod theme;
 
-use crate::engine::{SimResponse, SimulationWorker};
+use crate::engine::{apply_player_action, ensure_fallback_graph, SimResponse, SimulationWorker};
 use crate::lua_bridge::LuaEngine;
 use crate::map::Latam3dScene;
 use crate::models::{
-    CapitalMarkerData, Difficulty, GameState, MapMode, ProvinceData, ScreenRoute,
+    CapitalMarkerData, Difficulty, GameState, MapMode, PlayerAction, ProvinceData, ProvinceGraph,
+    ScreenRoute,
 };
 use crate::ui::components::chrome::{
     render_bottom_nav, render_event_popup, render_top_hud, TopBarAction,
 };
 use crate::ui::components::map_canvas::MapViewportState;
+use crate::ui::screens::companies_screen::{render_companies_screen, CompaniesViewState};
 use crate::ui::screens::country_select::{render_country_select, CountrySelectAction};
 use crate::ui::screens::diplomacy_screen::render_diplomacy_screen;
 use crate::ui::screens::economy_screen::render_economy_screen;
 use crate::ui::screens::main_menu::{render_main_menu, MainMenuAction};
 use crate::ui::screens::map_screen::render_map_screen;
-use crate::ui::screens::military_screen::render_military_screen;
+use crate::ui::screens::military_screen::{render_military_screen, MilitaryScreenAction};
 use crate::ui::screens::politics_screen::render_politics_screen;
 use crate::ui::screens::settings_screen::{render_settings_screen, SettingsAction};
 use crate::ui::theme::apply_tactical_theme;
@@ -41,14 +43,18 @@ pub struct HorizonteLatamApp {
     pub gpu_info: String,
     pub gpu_3d_error: Arc<Mutex<Option<String>>>,
     pub provinces_catalog: BTreeMap<String, ProvinceData>,
+    pub province_graph: Arc<ProvinceGraph>,
     pub capitals_catalog: Vec<CapitalMarkerData>,
     pub state: GameState,
     pub worker: SimulationWorker,
     pub map_mode: MapMode,
     pub map_viewport: MapViewportState,
+    pub companies_view: CompaniesViewState,
     pub selected_difficulty: Difficulty,
     pub show_country_popup: bool,
     pub last_tick_instant: Instant,
+    pub day_accumulator: f64,
+    pub pending_actions: Vec<PlayerAction>,
     pub last_error: Option<String>,
     theme_initialized: bool,
 }
@@ -89,21 +95,33 @@ impl HorizonteLatamApp {
                 (BTreeMap::new(), Vec::new())
             });
 
-        let mut worker = SimulationWorker::spawn();
+        let graph = scene_3d
+            .as_ref()
+            .map(|s| s.build_province_graph(&provinces_catalog))
+            .unwrap_or_default();
+        let province_graph = Arc::new(graph);
+
+        let mut worker = SimulationWorker::spawn(Arc::clone(&province_graph));
         worker.request_new_campaign(Difficulty::Normal);
 
         let placeholder_state = GameState {
-            turn: 1,
+            total_days: 1,
             year: 2026,
             month: 1,
+            day: 1,
             paused: true,
             speed_level: 1,
             difficulty: Difficulty::Normal,
             player_country_id: None,
             selected_country_id: Some("MX".to_string()),
             selected_province_mesh: None,
+            selected_unit_id: None,
             countries: BTreeMap::new(),
             relations: BTreeMap::new(),
+            units: Vec::new(),
+            next_unit_id: 1,
+            companies: Vec::new(),
+            next_company_id: 1,
             active_event: None,
             chronicle: Vec::new(),
         };
@@ -115,16 +133,27 @@ impl HorizonteLatamApp {
             gpu_info,
             gpu_3d_error: Arc::new(Mutex::new(None)),
             provinces_catalog,
+            province_graph,
             capitals_catalog,
             state: placeholder_state,
             worker,
             map_mode: MapMode::Political,
             map_viewport: MapViewportState::default(),
+            companies_view: CompaniesViewState::default(),
             selected_difficulty: Difficulty::Normal,
             show_country_popup: false,
             last_tick_instant: Instant::now(),
+            day_accumulator: 0.0,
+            pending_actions: Vec::new(),
             last_error: startup_err,
             theme_initialized: false,
+        }
+    }
+
+    fn dispatch_player_action(&mut self, action: PlayerAction) {
+        apply_player_action(&mut self.state, &self.province_graph, &action);
+        if self.worker.is_busy {
+            self.pending_actions.push(action);
         }
     }
 
@@ -133,21 +162,45 @@ impl HorizonteLatamApp {
             self.worker.is_busy = false;
             match msg {
                 SimResponse::CampaignReady(new_state) => {
-                    let keep_player = self.state.player_country_id.clone();
                     self.state = *new_state;
-                    if self.route == ScreenRoute::MainMenu {
-                        let _ = keep_player;
+                    self.pending_actions.clear();
+                    self.day_accumulator = 0.0;
+
+                    let mut graph_mut = (*self.province_graph).clone();
+                    let prev_len = graph_mut.len();
+                    ensure_fallback_graph(&self.state.countries, &mut graph_mut);
+                    if graph_mut.len() != prev_len {
+                        self.province_graph = Arc::new(graph_mut);
+                        self.worker
+                            .set_province_graph(Arc::clone(&self.province_graph));
                     }
                 }
                 SimResponse::TurnCompleted(updated) => {
                     let prev_selected = self.state.selected_country_id.clone();
                     let prev_prov = self.state.selected_province_mesh.clone();
+                    let prev_unit = self.state.selected_unit_id;
+                    let prev_paused = self.state.paused;
+                    let prev_speed = self.state.speed_level;
+                    let prev_diff = self.state.difficulty;
+
                     self.state = *updated;
+                    self.state.paused = prev_paused;
+                    self.state.speed_level = prev_speed;
+                    self.state.difficulty = prev_diff;
                     if self.state.selected_country_id.is_none() {
                         self.state.selected_country_id = prev_selected;
                     }
                     if self.state.selected_province_mesh.is_none() {
                         self.state.selected_province_mesh = prev_prov;
+                    }
+                    if self.state.selected_unit_id.is_none() {
+                        self.state.selected_unit_id = prev_unit;
+                    }
+
+                    // Reaplicar órdenes tácticas emitidas mientras el hilo estaba ocupado
+                    let replay = std::mem::take(&mut self.pending_actions);
+                    for act in replay {
+                        apply_player_action(&mut self.state, &self.province_graph, &act);
                     }
                 }
                 SimResponse::Error(err) => {
@@ -157,23 +210,33 @@ impl HorizonteLatamApp {
         }
     }
 
-    fn maybe_auto_advance_turn(&mut self, ctx: &egui::Context) {
-        if self.state.paused || self.worker.is_busy || self.state.active_event.is_some() {
+    fn maybe_advance_realtime(&mut self, ctx: &egui::Context) {
+        let now = Instant::now();
+        let dt = (now - self.last_tick_instant).as_secs_f64().min(0.25);
+        self.last_tick_instant = now;
+
+        if self.state.paused
+            || self.state.active_event.is_some()
+            || self.state.player_country_id.is_none()
+        {
+            self.day_accumulator = 0.0;
             return;
         }
-        if self.state.player_country_id.is_none() {
-            return;
-        }
-        let interval_secs = match self.state.speed_level {
-            3 => 0.9,
-            2 => 1.8,
-            _ => 3.2,
+
+        let days_per_sec = match self.state.speed_level {
+            3 => 6.0,
+            2 => 2.8,
+            _ => 1.2,
         };
-        if self.last_tick_instant.elapsed().as_secs_f32() >= interval_secs {
-            self.last_tick_instant = Instant::now();
-            self.worker.request_advance_turn(&self.state);
+        self.day_accumulator += dt * days_per_sec;
+
+        if self.day_accumulator >= 1.0 && !self.worker.is_busy {
+            let days_to_step = (self.day_accumulator.floor() as u32).clamp(1, 3);
+            self.day_accumulator -= days_to_step as f64;
+            self.worker.request_advance_days(&self.state, days_to_step);
         }
-        ctx.request_repaint_after(std::time::Duration::from_millis(120));
+
+        ctx.request_repaint_after(std::time::Duration::from_millis(50));
     }
 }
 
@@ -193,22 +256,23 @@ impl eframe::App for HorizonteLatamApp {
         }
 
         self.poll_worker_responses();
-        self.maybe_auto_advance_turn(ctx);
 
         let in_campaign = !matches!(self.route, ScreenRoute::MainMenu | ScreenRoute::CountrySelect)
             && self.state.player_country_id.is_some();
 
-        // Barra superior persistente durante la campaña
+        // Barra superior persistente durante la campaña (altura fija para nunca invadir el mapa)
         if in_campaign {
             let hud_frame = egui::Frame::new()
                 .fill(crate::ui::theme::BG_DEEP)
                 .inner_margin(egui::Margin {
                     left: 8,
                     right: crate::ui::theme::SAFE_RIGHT_PAD,
-                    top: 4,
+                    top: 3,
                     bottom: 2,
                 });
             egui::TopBottomPanel::top("top_hud_panel")
+                .exact_height(54.0)
+                .resizable(false)
                 .frame(hud_frame)
                 .show(ctx, |ui| {
                     match render_top_hud(ui, &self.state, self.worker.is_busy) {
@@ -216,9 +280,6 @@ impl eframe::App for HorizonteLatamApp {
                         TopBarAction::TogglePause => {
                             self.state.paused = !self.state.paused;
                             self.last_tick_instant = Instant::now();
-                        }
-                        TopBarAction::AdvanceOneTurn => {
-                            self.worker.request_advance_turn(&self.state);
                         }
                         TopBarAction::SetSpeed(spd) => {
                             self.state.speed_level = spd;
@@ -233,9 +294,11 @@ impl eframe::App for HorizonteLatamApp {
                     left: 8,
                     right: crate::ui::theme::SAFE_RIGHT_PAD,
                     top: 2,
-                    bottom: 4,
+                    bottom: 3,
                 });
             egui::TopBottomPanel::bottom("bottom_nav_panel")
+                .exact_height(50.0)
+                .resizable(false)
                 .frame(nav_frame)
                 .show(ctx, |ui| {
                     if let Some(next_route) = render_bottom_nav(ui, self.route) {
@@ -308,9 +371,11 @@ impl eframe::App for HorizonteLatamApp {
                             }
                             self.state.player_country_id = Some(country_id.clone());
                             self.state.selected_country_id = Some(country_id.clone());
+                            self.state.paused = false;
+                            self.last_tick_instant = Instant::now();
                             self.state.push_chronicle(
                                 country_id,
-                                format!("Has asumido el liderazgo de {name}."),
+                                format!("Has asumido el liderazgo de {name} en tiempo real."),
                             );
                             self.route = ScreenRoute::WorldMap;
                         }
@@ -329,15 +394,39 @@ impl eframe::App for HorizonteLatamApp {
                         &mut self.map_viewport,
                         &mut self.show_country_popup,
                     );
+                    if let Some((unit_id, target_province)) = res.order_unit_move {
+                        self.dispatch_player_action(PlayerAction::OrderUnitMove {
+                            unit_id,
+                            target_province,
+                        });
+                    }
                     if let Some(target_id) = res.open_diplomacy_with {
                         self.state.selected_country_id = Some(target_id);
                         self.route = ScreenRoute::Diplomacy;
                     }
                 }
-                ScreenRoute::Economy => render_economy_screen(ui, &mut self.state),
+                ScreenRoute::Economy => {
+                    if render_economy_screen(ui, &mut self.state) {
+                        self.route = ScreenRoute::Companies;
+                    }
+                }
+                ScreenRoute::Companies => {
+                    render_companies_screen(ui, &self.state, &mut self.companies_view);
+                }
                 ScreenRoute::Politics => render_politics_screen(ui, &mut self.state),
                 ScreenRoute::Diplomacy => render_diplomacy_screen(ui, &mut self.state),
-                ScreenRoute::Military => render_military_screen(ui, &mut self.state),
+                ScreenRoute::Military => {
+                    match render_military_screen(ui, &mut self.state, &self.province_graph) {
+                        MilitaryScreenAction::None => {}
+                        MilitaryScreenAction::PlayerAction(act) => {
+                            self.dispatch_player_action(act);
+                        }
+                        MilitaryScreenAction::OpenMapForUnit(uid) => {
+                            self.state.selected_unit_id = Some(uid);
+                            self.route = ScreenRoute::WorldMap;
+                        }
+                    }
+                }
                 ScreenRoute::Settings => {
                     match render_settings_screen(
                         ui,
@@ -386,5 +475,8 @@ impl eframe::App for HorizonteLatamApp {
                 self.state.active_event = None;
             }
         }
+
+        // Avance continuo en tiempo real al final del frame para no perder interacciones del usuario
+        self.maybe_advance_realtime(ctx);
     }
 }

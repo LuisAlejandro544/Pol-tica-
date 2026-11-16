@@ -9,16 +9,19 @@ use crate::map::Latam3dScene;
 use crate::models::{GameState, MapMode};
 use crate::ui::theme::{
     draw_corner_rivets, step_button, GameIcon, ACCENT_CRIMSON, ACCENT_CYAN, ACCENT_EMERALD,
-    ACCENT_GOLD, BG_PANEL, BG_WELL, BORDER_BRASS, BORDER_SUBTLE, TEXT_MUTED, TEXT_PRIMARY,
+    ACCENT_GOLD, BG_PANEL, BG_WELL, BORDER_BRASS, BORDER_SUBTLE, TEXT_DARK, TEXT_MUTED,
+    TEXT_PRIMARY,
 };
 use eframe::egui_wgpu::{self, wgpu};
-use egui::{Color32, CornerRadius, Margin, Rect, RichText, Sense, Stroke, Ui, Vec2};
+use egui::{Color32, CornerRadius, FontId, Margin, Pos2, Rect, RichText, Sense, Stroke, Ui, Vec2};
+use glam::{Vec3, Vec4};
 use parking_lot::Mutex;
 use std::sync::Arc;
 
 pub struct MapPickHit {
     pub country_id: String,
     pub province_mesh: Option<String>,
+    pub unit_id: Option<u64>,
 }
 
 pub struct MapViewportState {
@@ -208,6 +211,101 @@ pub fn render_latam_map(
     );
     draw_corner_rivets(&painter, rect, BORDER_BRASS);
 
+    // Proyección 3D -> 2D de unidades militares desplegadas y rutas de marcha (solo en campaña activa)
+    let mut unit_hitboxes: Vec<(Rect, u64, String)> = Vec::new();
+    if state.player_country_id.is_some() {
+        let map_painter = painter.with_clip_rect(rect.shrink(2.0));
+        for unit in &state.units {
+            let Some(screen_pos) = project_world_to_rect(unit.world_pos, view_proj, rect) else {
+                continue;
+            };
+            let is_player_unit =
+                state.player_country_id.as_deref() == Some(unit.country_id.as_str());
+            let is_selected = state.selected_unit_id == Some(unit.id);
+
+            // Línea de ruta hacia la provincia objetivo si está marchando
+            if let Some(target_mesh) = &unit.target_province {
+                if let Some(dest_mesh) = scene.pick_meshes.iter().find(|m| m.mesh_name == *target_mesh) {
+                    let dest_world = [
+                        dest_mesh.center.x,
+                        dest_mesh.center.y + 0.35,
+                        dest_mesh.center.z,
+                    ];
+                    if let Some(dest_screen) = project_world_to_rect(dest_world, view_proj, rect) {
+                        let line_col = if is_selected {
+                            ACCENT_GOLD
+                        } else if is_player_unit {
+                            ACCENT_CYAN
+                        } else {
+                            ACCENT_CRIMSON
+                        };
+                        map_painter.line_segment(
+                            [screen_pos, dest_screen],
+                            Stroke::new(2.0_f32, line_col),
+                        );
+                        map_painter.circle_filled(dest_screen, 3.5, line_col);
+                    }
+                }
+            }
+
+            let c_rgb = state
+                .countries
+                .get(&unit.country_id)
+                .map(|c| Color32::from_rgb(c.color[0], c.color[1], c.color[2]))
+                .unwrap_or(Color32::GRAY);
+
+            let badge_size = if is_selected {
+                Vec2::new(50.0, 20.0)
+            } else {
+                Vec2::new(44.0, 18.0)
+            };
+            let badge_rect = Rect::from_center_size(screen_pos, badge_size);
+            let border_col = if is_selected {
+                ACCENT_GOLD
+            } else if is_player_unit {
+                ACCENT_CYAN
+            } else {
+                Color32::from_rgb(20, 24, 30)
+            };
+            let fill_col = if is_selected {
+                ACCENT_GOLD
+            } else {
+                Color32::from_rgba_unmultiplied(16, 22, 32, 232)
+            };
+
+            map_painter.rect_filled(badge_rect, CornerRadius::same(3), fill_col);
+            map_painter.rect_stroke(
+                badge_rect,
+                CornerRadius::same(3),
+                Stroke::new(if is_selected { 2.0_f32 } else { 1.2_f32 }, border_col),
+                egui::StrokeKind::Inside,
+            );
+
+            // Franja lateral de color nacional
+            let stripe = Rect::from_min_size(
+                badge_rect.min + Vec2::new(1.5, 1.5),
+                Vec2::new(5.0, badge_rect.height() - 3.0),
+            );
+            map_painter.rect_filled(stripe, CornerRadius::same(1), c_rgb);
+
+            let troops_k = (unit.troops as f64) / 1_000.0;
+            let lbl = if troops_k >= 10.0 {
+                format!("{:.0}K", troops_k)
+            } else {
+                format!("{:.1}K", troops_k)
+            };
+            map_painter.text(
+                badge_rect.center() + Vec2::new(3.0, 0.0),
+                egui::Align2::CENTER_CENTER,
+                lbl,
+                FontId::proportional(if is_selected { 11.0 } else { 10.0 }),
+                if is_selected { TEXT_DARK } else { TEXT_PRIMARY },
+            );
+
+            unit_hitboxes.push((badge_rect.expand(4.0), unit.id, unit.country_id.clone()));
+        }
+    }
+
     // Placa flotante superior izquierda: Modo de mapa y nación bajo foco
     let mode_title = match map_mode {
         MapMode::Political => "MAPA POLÍTICO",
@@ -215,8 +313,10 @@ pub fn render_latam_map(
         MapMode::Inflation => "RIESGO INFLACIONARIO",
         MapMode::Diplomacy => "DIPLOMACIA",
     };
-    let badge_rect = Rect::from_min_size(rect.left_top() + Vec2::new(10.0, 10.0), Vec2::new(225.0, 26.0));
+    let badge_w = (rect.width() - 24.0).clamp(180.0, 310.0);
+    let badge_rect = Rect::from_min_size(rect.left_top() + Vec2::new(10.0, 10.0), Vec2::new(badge_w, 26.0));
     let mut badge_ui = ui.new_child(egui::UiBuilder::new().max_rect(badge_rect));
+    badge_ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
     egui::Frame::new()
         .fill(Color32::from_rgba_unmultiplied(12, 18, 26, 220))
         .stroke(Stroke::new(1.0_f32, BORDER_BRASS))
@@ -238,7 +338,7 @@ pub fn render_latam_map(
         });
 
     // Consola táctil flotante de cámara (botón físico estilo HOI4) en la esquina inferior derecha
-    let dock_w = (rect.width() - 20.0).clamp(210.0, 290.0);
+    let dock_w = (rect.width() - 20.0).clamp(220.0, 294.0);
     let btn_rect = Rect::from_min_size(
         rect.right_bottom() - Vec2::new(dock_w + 10.0, 44.0),
         Vec2::new(dock_w, 36.0),
@@ -252,6 +352,7 @@ pub fn render_latam_map(
         .inner_margin(Margin::symmetric(5, 3))
         .show(&mut ui_child, |ui| {
             ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 5.0;
                 if step_button(ui, Vec2::new(28.0, 28.0), "", Some(GameIcon::Plus)).clicked() {
                     viewport.camera_3d.zoom_by_factor(1.24);
                     cam_btn_clicked = true;
@@ -273,7 +374,7 @@ pub fn render_latam_map(
                 } else {
                     "2D"
                 };
-                if step_button(ui, Vec2::new(50.0, 28.0), angle_lbl, Some(GameIcon::Camera3D)).clicked() {
+                if step_button(ui, Vec2::new(52.0, 28.0), angle_lbl, Some(GameIcon::Camera3D)).clicked() {
                     if viewport.camera_3d.is_top_down() {
                         viewport.camera_3d.set_tactical_3d();
                     } else {
@@ -281,22 +382,32 @@ pub fn render_latam_map(
                     }
                     cam_btn_clicked = true;
                 }
-                if step_button(ui, Vec2::new(66.0, 28.0), "Centro", Some(GameIcon::Center)).clicked() {
+                if step_button(ui, Vec2::new(72.0, 28.0), "Centro", Some(GameIcon::Center)).clicked() {
                     viewport.camera_3d.reset();
                     cam_btn_clicked = true;
                 }
             });
         });
 
-    // Raycasting 3D exacto al tocar/clicar sobre una provincia (ignorando toques sobre la barra de cámara)
+    // Raycasting 3D exacto o selección de unidad militar al tocar/clicar en el mapa
     if response.clicked() && !cam_btn_clicked {
         if let Some(pointer_pos) = response.interact_pointer_pos() {
             if !btn_rect.contains(pointer_pos) {
+                for (ubox, uid, ucid) in unit_hitboxes.iter().rev() {
+                    if ubox.contains(pointer_pos) {
+                        return Some(MapPickHit {
+                            country_id: ucid.clone(),
+                            province_mesh: None,
+                            unit_id: Some(*uid),
+                        });
+                    }
+                }
                 let (ray_origin, ray_dir) = viewport.camera_3d.screen_to_ray(pointer_pos, rect);
                 if let Some((mesh_name, country_id)) = scene.pick_province_at_ray(ray_origin, ray_dir) {
                     return Some(MapPickHit {
                         country_id: country_id.to_string(),
                         province_mesh: Some(mesh_name.to_string()),
+                        unit_id: None,
                     });
                 }
             }
@@ -305,6 +416,20 @@ pub fn render_latam_map(
 
     let _ = (BG_PANEL, BG_WELL, BORDER_SUBTLE);
     None
+}
+
+fn project_world_to_rect(world_pos: [f32; 3], view_proj: glam::Mat4, rect: Rect) -> Option<Pos2> {
+    let clip = view_proj * Vec4::new(world_pos[0], world_pos[1], world_pos[2], 1.0);
+    if clip.w <= 0.05 {
+        return None;
+    }
+    let ndc = Vec3::new(clip.x / clip.w, clip.y / clip.w, clip.z / clip.w);
+    if !(-1.1..=1.1).contains(&ndc.x) || !(-1.1..=1.1).contains(&ndc.y) {
+        return None;
+    }
+    let sx = rect.left() + (ndc.x * 0.5 + 0.5) * rect.width();
+    let sy = rect.top() + (0.5 - ndc.y * 0.5) * rect.height();
+    Some(Pos2::new(sx, sy))
 }
 
 fn compute_country_fill(

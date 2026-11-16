@@ -86,6 +86,7 @@ test('Correcciones Rust: AI MilitaryState, U16 GLB colors, Window max_width, Str
     'game/src/ui/components/chrome.rs',
     'game/src/ui/components/map_canvas.rs',
     'game/src/ui/screens/country_select.rs',
+    'game/src/ui/screens/companies_screen.rs',
     'game/src/ui/screens/diplomacy_screen.rs',
     'game/src/ui/screens/economy_screen.rs',
     'game/src/ui/screens/main_menu.rs',
@@ -206,6 +207,7 @@ test('UI móvil: scroll táctil habilitado, sin colisiones de ScrollArea ID y co
     'game/src/ui/components/chrome.rs',
     'game/src/ui/screens/main_menu.rs',
     'game/src/ui/screens/country_select.rs',
+    'game/src/ui/screens/companies_screen.rs',
     'game/src/ui/screens/map_screen.rs',
     'game/src/ui/screens/economy_screen.rs',
     'game/src/ui/screens/politics_screen.rs',
@@ -305,8 +307,63 @@ test('Shader WGSL evita palabra reservada meta y la UI táctica incluye escudos,
 
   assert.ok(theme.includes('draw_country_shield'), 'Debe incluir escudo heráldico procedural');
   assert.ok(theme.includes('game_button'), 'Debe incluir botones táctiles mecanizados');
+  assert.ok(theme.includes('layout_no_wrap'), 'game_button debe medir texto con layout_no_wrap para evitar recortes');
   assert.ok(theme.includes('SAFE_RIGHT_PAD'), 'Debe definir margen derecho seguro para barra Android');
   assert.ok(uiMod.includes('SAFE_RIGHT_PAD'), 'ui/mod.rs debe aplicar SAFE_RIGHT_PAD');
+  assert.ok(uiMod.includes('.exact_height(54.0)'), 'top_hud_panel debe fijar altura exacta para no tapar el CentralPanel');
+  assert.ok(uiMod.includes('.exact_height(50.0)'), 'bottom_nav_panel debe fijar altura exacta');
   assert.ok(chrome.includes('draw_country_shield'), 'Top HUD debe mostrar escudo del país');
+  assert.ok(chrome.includes('TextWrapMode::Extend'), 'Top HUD debe evitar saltos de línea en métricas y fecha');
+  assert.ok(chrome.includes('.max_height(36.0)'), 'top_hud_scroll debe limitar su altura máxima');
 });
+
+test('Simulación en tiempo real, reclutamiento/movimiento de tropas por estados y empresas/bolsa/desempleo', () => {
+  const companiesLua = fs.readFileSync(path.resolve('game/assets/scripts/companies_latam.lua'), 'utf8');
+  const rulesLua = fs.readFileSync(path.resolve('game/assets/scripts/game_rules.lua'), 'utf8');
+  const modelsRs = fs.readFileSync(path.resolve('game/src/models/mod.rs'), 'utf8');
+  const engineRs = fs.readFileSync(path.resolve('game/src/engine/mod.rs'), 'utf8');
+  const aiRs = fs.readFileSync(path.resolve('game/src/ai/mod.rs'), 'utf8');
+  const chromeRs = fs.readFileSync(path.resolve('game/src/ui/components/chrome.rs'), 'utf8');
+  const mapCanvasRs = fs.readFileSync(path.resolve('game/src/ui/components/map_canvas.rs'), 'utf8');
+  const militaryRs = fs.readFileSync(path.resolve('game/src/ui/screens/military_screen.rs'), 'utf8');
+  const companiesRs = fs.readFileSync(path.resolve('game/src/ui/screens/companies_screen.rs'), 'utf8');
+  const uiModRs = fs.readFileSync(path.resolve('game/src/ui/mod.rs'), 'utf8');
+
+  // Catálogo empresarial Lua
+  for (const catId of ['TECH', 'ENERGY', 'AGRO', 'MANUF', 'LOGISTICS', 'FINANCE', 'HEALTH']) {
+    assert.ok(companiesLua.includes(`id = "${catId}"`), `Falta categoría ${catId} en companies_latam.lua`);
+  }
+  assert.ok(companiesLua.includes('products ='), 'Faltan productos vendidos en companies_latam.lua');
+  assert.ok(companiesLua.includes('base_price_min ='), 'Falta rango de precio de acción');
+  assert.ok(companiesLua.includes('gdp_per_job_m ='), 'Falta aporte al PIB por empleo');
+
+  // Reglas económicas Lua: mantenimiento de tropas, empresas y desempleo
+  assert.ok(rulesLua.includes('troop_upkeep_m'), 'game_rules.lua debe calcular mantenimiento de soldados');
+  assert.ok(rulesLua.includes('corporate_gdp_bonus_m'), 'game_rules.lua debe incluir aporte empresarial al PIB');
+  assert.ok(rulesLua.includes('unemployment_pct'), 'game_rules.lua debe calcular desempleo');
+
+  // Tiempo real en lugar de turnos
+  assert.equal(chromeRs.includes('+1 MES'), false, 'La barra superior ya no debe ser por turnos (+1 MES)');
+  assert.equal(chromeRs.includes('TURNO {}'), false, 'La barra superior debe mostrar días en tiempo real');
+  assert.ok(chromeRs.includes('EN VIVO'), 'Top HUD debe indicar simulación EN VIVO');
+  assert.ok(chromeRs.includes('Empresas'), 'Navegación inferior debe incluir pantalla Empresas');
+  assert.ok(chromeRs.includes('DESEMPLEO'), 'Top HUD debe mostrar tasa de desempleo');
+  assert.ok(uiModRs.includes('maybe_advance_realtime'), 'ui/mod.rs debe avanzar en tiempo real');
+  assert.ok(engineRs.includes('advance_single_day'), 'engine/mod.rs debe simular días en tiempo real');
+
+  // Reclutamiento, descuento de ingresos y marcha por estados
+  assert.ok(modelsRs.includes('struct ArmyUnit'), 'models/mod.rs debe definir ArmyUnit');
+  assert.ok(modelsRs.includes('struct ProvinceNode'), 'models/mod.rs debe definir ProvinceNode');
+  assert.ok(modelsRs.includes('struct CompanyEntity'), 'models/mod.rs debe definir CompanyEntity');
+  assert.ok(engineRs.includes('step_unit_movements'), 'engine/mod.rs debe mover tropas entre estados');
+  assert.ok(engineRs.includes('step_companies_and_stocks'), 'engine/mod.rs debe fundar empresas y actualizar acciones');
+  assert.ok(aiRs.includes('find_province_route'), 'ai/mod.rs debe calcular rutas entre estados');
+  assert.ok(aiRs.includes('move_unit'), 'IA debe mover unidades entre estados');
+  assert.ok(mapCanvasRs.includes('project_world_to_rect'), 'map_canvas.rs debe proyectar unidades 3D en pantalla');
+  assert.ok(militaryRs.includes('RecruitSoldiers'), 'military_screen.rs debe reclutar soldados por estado');
+  assert.ok(militaryRs.includes('OrderUnitMove'), 'military_screen.rs debe permitir ordenar marcha entre estados');
+  assert.ok(companiesRs.startsWith('//! Propósito del archivo:'), 'companies_screen.rs debe tener encabezado explicativo');
+  assert.ok(companiesRs.includes('draw_stock_sparkline'), 'companies_screen.rs debe dibujar gráfica de acciones');
+});
+
 

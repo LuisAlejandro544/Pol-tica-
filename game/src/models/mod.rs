@@ -1,7 +1,8 @@
 //! Propósito del archivo:
-//! Define todas las estructuras de datos del juego (países, economía, moneda,
-//! PIB, partidos políticos, diplomacia, fuerzas armadas, pantallas y popups).
-//! Se usan tipos de tamaño explícito (`u64`, `i64`, `f64`) para garantizar
+//! Define todas las estructuras de datos del juego en tiempo real (países, economía,
+//! moneda, PIB, desempleo, empresas y precios de acciones, soldados/unidades por estado,
+//! partidos políticos, diplomacia, pantallas y popups).
+//! Se usan tipos de tamaño explícito (`u64`, `i64`, `f64`, `u32`) para garantizar
 //! exactitud numérica idéntica en arquitecturas Android de 32 bits y 64 bits.
 
 use serde::{Deserialize, Serialize};
@@ -14,13 +15,14 @@ pub enum ScreenRoute {
     CountrySelect,
     WorldMap,
     Economy,
+    Companies,
     Politics,
     Diplomacy,
     Military,
     Settings,
 }
 
-/// Modos de visualización cromática sobre el mapa SVG de Latinoamérica.
+/// Modos de visualización cromática sobre el mapa 3D de Latinoamérica.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MapMode {
     Political,
@@ -48,7 +50,7 @@ pub struct PoliticalParty {
     pub is_ruling: bool,
 }
 
-/// Estado macroeconómico y monetario de una nación.
+/// Estado macroeconómico, monetario, laboral y fiscal de una nación.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EconomyState {
     pub currency_code: String,
@@ -64,6 +66,9 @@ pub struct EconomyState {
     pub infra_investment_pct: f64,
     pub social_investment_pct: f64,
     pub last_monthly_balance: f64,
+    pub troop_upkeep_usd_millions: f64,
+    pub unemployment_pct: f64,
+    pub corporate_gdp_bonus_m: f64,
 }
 
 /// Estado militar y defensa nacional.
@@ -73,6 +78,117 @@ pub struct MilitaryState {
     pub defense_budget_pct: f64,
     pub readiness: f64,
 }
+
+/// Unidad o regimiento desplegado en un estado/provincia y desplazable en tiempo real.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArmyUnit {
+    pub id: u64,
+    pub name: String,
+    pub country_id: String,
+    pub troops: u64,
+    pub current_province: String,
+    pub target_province: Option<String>,
+    pub route_queue: Vec<String>,
+    pub march_progress: f32,
+    pub world_pos: [f32; 3],
+    pub morale: f64,
+}
+
+/// Categorías sectoriales para empresas fundadas dinámicamente.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CompanyCategory {
+    Tecnologia,
+    Energia,
+    Agroindustria,
+    Manufactura,
+    Logistica,
+    Finanzas,
+    Salud,
+}
+
+impl CompanyCategory {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Tecnologia => "Tecnología",
+            Self::Energia => "Energía",
+            Self::Agroindustria => "Agroindustria",
+            Self::Manufactura => "Manufactura",
+            Self::Logistica => "Logística",
+            Self::Finanzas => "Finanzas",
+            Self::Salud => "Salud",
+        }
+    }
+
+    pub fn from_lua_id(id: &str) -> Self {
+        match id {
+            "TECH" => Self::Tecnologia,
+            "ENERGY" => Self::Energia,
+            "AGRO" => Self::Agroindustria,
+            "MANUF" => Self::Manufactura,
+            "LOGISTICS" => Self::Logistica,
+            "FINANCE" => Self::Finanzas,
+            _ => Self::Salud,
+        }
+    }
+}
+
+/// Plantilla de sector corporativo cargada desde `scripts/companies_latam.lua`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompanyCategoryTemplate {
+    pub id: String,
+    pub category: CompanyCategory,
+    pub prefixes: Vec<String>,
+    pub suffixes: Vec<String>,
+    pub products: Vec<String>,
+    pub base_price_min: f64,
+    pub base_price_max: f64,
+    pub jobs_min: u64,
+    pub jobs_max: u64,
+    pub gdp_per_job_m: f64,
+    pub inflation_sensitivity: f64,
+    pub rate_sensitivity: f64,
+}
+
+/// Empresa privada fundada aleatoriamente en algún país latinoamericano.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompanyEntity {
+    pub id: u64,
+    pub name: String,
+    pub country_id: String,
+    pub category: CompanyCategory,
+    pub sells: String,
+    pub founded_label: String,
+    pub employees: u64,
+    pub share_price: f64,
+    pub prev_share_price: f64,
+    pub price_history: Vec<f64>,
+    pub annual_gdp_contribution_m: f64,
+    pub inflation_sensitivity: f64,
+    pub rate_sensitivity: f64,
+}
+
+impl CompanyEntity {
+    pub fn share_delta_pct(&self) -> f64 {
+        if self.prev_share_price <= 0.01 {
+            return 0.0;
+        }
+        ((self.share_price - self.prev_share_price) / self.prev_share_price) * 100.0
+    }
+}
+
+/// Nodo topológico de estado/provincia con posición 3D y adyacencia para movimiento de tropas.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProvinceNode {
+    pub mesh_name: String,
+    pub country_id: String,
+    pub name: String,
+    pub world_pos: [f32; 3],
+    pub terrain_type: String,
+    pub elevation_avg: f64,
+    pub neighbors: Vec<String>,
+}
+
+pub type ProvinceGraph = BTreeMap<String, ProvinceNode>;
 
 /// Perfil estratégico de la IA local para naciones no controladas por el jugador.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -115,6 +231,11 @@ impl CountryState {
     /// Devuelve el partido gobernante actual, si existe.
     pub fn ruling_party(&self) -> Option<&PoliticalParty> {
         self.political_parties.iter().find(|p| p.is_ruling)
+    }
+
+    /// Costo mensual de mantenimiento por soldados activos en millones de USD.
+    pub fn estimated_troop_upkeep_m(&self) -> f64 {
+        (self.military.active_troops as f64 / 1_000.0) * 1.35
     }
 
     /// Índice compuesto de poder militar para comparativas diplomáticas e IA.
@@ -187,29 +308,50 @@ pub struct CapitalMarkerData {
     pub pop_max: u64,
 }
 
-/// Registro reciente de acciones tomadas por la IA local o el jugador.
+/// Registro reciente de acciones tomadas por la IA local, empresas o el jugador.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChronicleEntry {
-    pub turn: u64,
+    pub day: u64,
     pub date_label: String,
     pub country_id: String,
     pub summary: String,
 }
 
-/// Estado global completo de la partida en memoria.
+/// Acciones emitidas desde la interfaz que deben preservarse aunque el hilo de simulación esté ocupado.
+#[derive(Debug, Clone)]
+pub enum PlayerAction {
+    RecruitSoldiers {
+        country_id: String,
+        province_mesh: String,
+        troops: u64,
+        cost_m: f64,
+    },
+    OrderUnitMove {
+        unit_id: u64,
+        target_province: String,
+    },
+}
+
+/// Estado global completo de la partida en memoria (simulación continua en tiempo real).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GameState {
-    pub turn: u64,
+    pub total_days: u64,
     pub year: i32,
     pub month: u8,
+    pub day: u8,
     pub paused: bool,
     pub speed_level: u8, // 1 = normal, 2 = rápido, 3 = muy rápido
     pub difficulty: Difficulty,
     pub player_country_id: Option<String>,
     pub selected_country_id: Option<String>,
     pub selected_province_mesh: Option<String>,
+    pub selected_unit_id: Option<u64>,
     pub countries: BTreeMap<String, CountryState>,
     pub relations: BTreeMap<(String, String), DiplomaticRelation>,
+    pub units: Vec<ArmyUnit>,
+    pub next_unit_id: u64,
+    pub companies: Vec<CompanyEntity>,
+    pub next_company_id: u64,
     pub active_event: Option<GameEvent>,
     pub chronicle: Vec<ChronicleEntry>,
 }
@@ -253,19 +395,48 @@ impl GameState {
             11 => "Nov",
             _ => "Dic",
         };
-        format!("{month_name} {}", self.year)
+        format!("{:02} {month_name} {}", self.day, self.year)
     }
 
     pub fn push_chronicle(&mut self, country_id: impl Into<String>, summary: impl Into<String>) {
         let entry = ChronicleEntry {
-            turn: self.turn,
+            day: self.total_days,
             date_label: self.date_label(),
             country_id: country_id.into(),
             summary: summary.into(),
         };
         self.chronicle.insert(0, entry);
-        if self.chronicle.len() > 60 {
-            self.chronicle.truncate(60);
+        if self.chronicle.len() > 70 {
+            self.chronicle.truncate(70);
+        }
+    }
+
+    pub fn country_company_jobs(&self, country_id: &str) -> u64 {
+        self.companies
+            .iter()
+            .filter(|c| c.country_id == country_id)
+            .map(|c| c.employees)
+            .sum()
+    }
+
+    pub fn country_company_gdp_bonus(&self, country_id: &str) -> f64 {
+        self.companies
+            .iter()
+            .filter(|c| c.country_id == country_id)
+            .map(|c| c.annual_gdp_contribution_m)
+            .sum()
+    }
+
+    pub fn sync_country_troop_totals(&mut self) {
+        let mut counts: BTreeMap<String, u64> = BTreeMap::new();
+        for unit in &self.units {
+            *counts.entry(unit.country_id.clone()).or_insert(0) += unit.troops;
+        }
+        for (cid, country) in &mut self.countries {
+            if let Some(&sum) = counts.get(cid) {
+                country.military.active_troops = sum;
+            }
+            country.economy.troop_upkeep_usd_millions = country.estimated_troop_upkeep_m();
         }
     }
 }

@@ -31,38 +31,40 @@ Descripción exacta de carpetas y responsabilidades de cada módulo en el reposi
 │   │   │   └── latinoamerica_3d.glb  # (Generado por Action manual) Mapa 3D Blender con provincias y capitales
 │   │   └── scripts/
 │   │       ├── countries_latam.lua   # Catálogo de 21 países (población, moneda, PIB, partidos, vecinos)
+│   │       ├── companies_latam.lua   # Catálogo de sectores, productos, empleos y parámetros bursátiles
 │   │       ├── provinces_latam.lua   # (Generado por Action manual) Catálogo de provincias y capitales
-│   │       ├── game_rules.lua        # Fórmulas mensuales de PIB, inflación, moneda y aprobación
+│   │       ├── game_rules.lua        # Fórmulas de PIB, inflación, desempleo y costo de mantenimiento militar
 │   │       └── events_latam.lua      # Generador de eventos geopolíticos para popups
 │   ├── tools/
 │   │   └── blender/
 │   │       ├── build_latam_map.py    # Script Blender (bpy/bmesh) que convierte GeoJSON a .glb + .lua
 │   │       └── sync_lua_metadata.lua # Script Lua 5.4 para exportar países a JSON y validar provincias
 │   ├── tests/
-│   │   └── verify_assets.test.ts     # Pruebas automatizadas (node:test) de integridad de SVG, Lua y Cargo.toml
+│   │   └── verify_assets.test.ts     # Pruebas automatizadas (node:test) de integridad de SVG, Lua, tiempo real y UI
 │   └── src/
 │       ├── lib.rs                    # Entrada android_main(AndroidApp) y run_desktop()
 │       ├── main.rs                   # Binario de escritorio
-│       ├── models/mod.rs             # Structs y enums (CountryState, EconomyState, PoliticalParty, GameState)
+│       ├── models/mod.rs             # Structs y enums (CountryState, ArmyUnit, CompanyEntity, ProvinceNode, GameState)
 │       ├── map/
 │       │   ├── mod.rs
-│       │   ├── glb_loader.rs         # Lector glTF/GLB (`latinoamerica_3d.glb`) + raycasting 3D de provincias
+│       │   ├── glb_loader.rs         # Lector glTF/GLB + raycasting 3D + grafo provincial (`build_province_graph`)
 │       │   ├── renderer_3d.rs        # Renderizador 3D `wgpu` + `egui-wgpu` en un solo draw call con iluminación
-│       │   └── svg_loader.rs         # Lector SVG + teselación lyon (respaldo 2D) + incrustación `assets`
-│       ├── lua_bridge/mod.rs         # VM Lua 5.4 (mlua) para datos, turnos y eventos
-│       ├── ai/mod.rs                 # IA local paralela en Rust (rayon) con personalidades y elecciones
-│       ├── engine/mod.rs             # Hilo secundario SimulationWorker (crossbeam-channel)
+│       │   └── svg_loader.rs         # Incrustación `assets` (`include_dir!`) y lector SVG
+│       ├── lua_bridge/mod.rs         # VM Lua 5.4 (mlua) para datos, empresas, economía mensual y eventos
+│       ├── ai/mod.rs                 # IA local paralela (rayon) con reclutamiento, rutas entre estados y diplomacia
+│       ├── engine/mod.rs             # Simulación continua en tiempo real (días, marcha de tropas, bolsa y empresas)
 │       └── ui/
-│           ├── mod.rs                # Router multipantalla (HorizonteLatamApp) y bucle de ticks
-│           ├── theme.rs              # Paleta táctica, espaciado táctil y formateadores
+│           ├── mod.rs                # Router multipantalla (HorizonteLatamApp) y acumulador de tiempo real
+│           ├── theme.rs              # Paleta táctica, espaciado táctil, íconos vectoriales y formateadores
 │           ├── components/
-│           │   ├── chrome.rs         # HUD superior, navegación inferior y popup de eventos
-│           │   └── map_canvas.rs     # Lienzo interactivo pan/zoom del mapa SVG
+│           │   ├── chrome.rs         # HUD superior en tiempo real, navegación inferior y popup de eventos
+│           │   └── map_canvas.rs     # Lienzo 3D interactivo con proyección de unidades y rutas de marcha
 │           └── screens/
 │               ├── main_menu.rs
 │               ├── country_select.rs
 │               ├── map_screen.rs
 │               ├── economy_screen.rs
+│               ├── companies_screen.rs # Bolsa regional, empresas fundadas, productos, empleos y gráficas
 │               ├── politics_screen.rs
 │               ├── diplomacy_screen.rs
 │               ├── military_screen.rs
