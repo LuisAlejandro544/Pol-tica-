@@ -197,12 +197,8 @@ impl eframe::App for HorizonteLatamApp {
             ctx.request_repaint();
         }
 
-        let active_scene_3d =
-            if self.use_3d_map && has_wgpu_state && !self.gpu_3d_failed.load(Ordering::Relaxed) {
-                self.scene_3d.as_ref()
-            } else {
-                None
-            };
+        let allow_3d =
+            self.use_3d_map && has_wgpu_state && !self.gpu_3d_failed.load(Ordering::Relaxed);
 
         self.poll_worker_responses();
         self.maybe_auto_advance_turn(ctx);
@@ -268,6 +264,7 @@ impl eframe::App for HorizonteLatamApp {
                     }
                 }
                 ScreenRoute::CountrySelect => {
+                    let active_scene_3d = if allow_3d { self.scene_3d.as_ref() } else { None };
                     match render_country_select(
                         ui,
                         active_scene_3d,
@@ -304,6 +301,7 @@ impl eframe::App for HorizonteLatamApp {
                     }
                 }
                 ScreenRoute::WorldMap => {
+                    let active_scene_3d = if allow_3d { self.scene_3d.as_ref() } else { None };
                     let res = render_map_screen(
                         ui,
                         active_scene_3d,

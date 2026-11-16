@@ -243,7 +243,7 @@ fn visit_node(
             if primitive.mode() != gltf::mesh::Mode::Triangles {
                 continue;
             }
-            let reader = primitive.reader(|buffer| buffers.get(buffer.index()));
+            let reader = primitive.reader(|buffer| buffers.get(buffer.index()).map(|v| &**v));
             let Some(pos_iter) = reader.read_positions() else {
                 continue;
             };

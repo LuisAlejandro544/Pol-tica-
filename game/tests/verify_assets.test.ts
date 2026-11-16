@@ -248,10 +248,12 @@ test('Protección anti-crash del visor 3D en Android (wgpu target_format vivo, l
 
   assert.ok(uiMod.includes('frame.wgpu_render_state()'), 'ui/mod.rs debe sincronizar target_format en cada frame');
   assert.ok(uiMod.includes('gpu_3d_failed'), 'ui/mod.rs debe activar respaldo 2D automático si falla la GPU 3D');
+  assert.ok(uiMod.includes('let allow_3d ='), 'ui/mod.rs debe calcular allow_3d antes de prestar &mut self en CentralPanel');
   assert.ok(renderer3d.includes('sync_target_format'), 'renderer_3d.rs debe reconstruir blit_pipeline si cambia target_format');
   assert.ok(renderer3d.includes('device.limits()'), 'renderer_3d.rs debe respetar límites de textura y buffer de la GPU móvil');
   assert.ok(renderer3d.includes('catch_unwind'), 'renderer_3d.rs debe capturar panics de driver GPU sin cerrar la app');
   assert.equal(renderer3d.includes('positions[vid]'), false, 'SHADER_BLIT_WGSL no debe usar indexado dinámico en array local');
+  assert.ok(glbLoader.includes('buffers.get(buffer.index()).map(|v| &**v)'), 'glb_loader.rs debe convertir Option<&Data> a Option<&[u8]>');
   assert.ok(glbLoader.includes('pm.positions.get('), 'glb_loader.rs debe usar indexado seguro con .get()');
   assert.ok(glbLoader.includes('raw_normals.get('), 'glb_loader.rs debe proteger lectura de normales');
   assert.ok(mapCanvas.includes('rect.is_positive()'), 'map_canvas.rs debe validar rect antes de crear PaintCallback');
