@@ -35,7 +35,7 @@ pub fn render_country_select(
     // Barra superior de la pantalla de selección
     egui::Frame::new()
         .fill(BG_PANEL)
-        .stroke(Stroke::new(1.0, BORDER_SUBTLE))
+        .stroke(Stroke::new(1.0_f32, BORDER_SUBTLE))
         .inner_margin(egui::Margin::symmetric(12, 8))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
@@ -65,7 +65,7 @@ pub fn render_country_select(
         // 1. Lista rápida de países (190 px)
         egui::Frame::new()
             .fill(BG_PANEL)
-            .stroke(Stroke::new(1.0, BORDER_SUBTLE))
+            .stroke(Stroke::new(1.0_f32, BORDER_SUBTLE))
             .corner_radius(8.0)
             .inner_margin(8.0)
             .show(ui, |ui| {
@@ -121,7 +121,7 @@ pub fn render_country_select(
         // 3. Dossier completo del país seleccionado (365 px)
         egui::Frame::new()
             .fill(BG_PANEL)
-            .stroke(Stroke::new(1.5, BORDER_BRASS))
+            .stroke(Stroke::new(1.5_f32, BORDER_BRASS))
             .corner_radius(8.0)
             .inner_margin(12.0)
             .show(ui, |ui| {
@@ -155,7 +155,7 @@ pub fn render_country_select(
                     // Bloque: Población, Moneda y PIB
                     egui::Frame::new()
                         .fill(BG_CARD)
-                        .stroke(Stroke::new(1.0, BORDER_SUBTLE))
+                        .stroke(Stroke::new(1.0_f32, BORDER_SUBTLE))
                         .corner_radius(6.0)
                         .inner_margin(10.0)
                         .show(ui, |ui| {
@@ -210,7 +210,7 @@ pub fn render_country_select(
                     // Bloque: Partidos Políticos
                     egui::Frame::new()
                         .fill(BG_CARD)
-                        .stroke(Stroke::new(1.0, BORDER_SUBTLE))
+                        .stroke(Stroke::new(1.0_f32, BORDER_SUBTLE))
                         .corner_radius(6.0)
                         .inner_margin(10.0)
                         .show(ui, |ui| {

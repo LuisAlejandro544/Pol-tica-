@@ -20,6 +20,6 @@ Si eres un modelo o agente que acaba de abrir este repositorio, lee esto antes d
 
 ## Lista de verificación antes de editar
 1. **¿El cambio afecta a Rust/Lua o al Action?** Recuerda que el contenedor web de AI Studio no tiene `rustc`, `cargo` ni `blender` instalados: valida sintaxis, dependencias y pruebas en `/game/tests/verify_assets.test.ts`, y valida la web con `npm run build` / `npm run lint`.
-2. **¿Vas a agregar un crate a `game/Cargo.toml`?** Verifica que sea `MIT` o `Apache-2.0` y compatible con `egui = "0.31"` y `wgpu = "24"`.
+2. **¿Vas a agregar un crate a `game/Cargo.toml`?** Verifica que sea `MIT` o `Apache-2.0` y compatible con `egui = "0.32"` y `wgpu = "25"`.
 3. **¿Vas a agregar una nueva sección visual?** Crea su propia pantalla bajo `/game/src/ui/screens/` y su botón en `render_bottom_nav` (o un popup si es una vista contextual pequeña).
 4. **¿Estás respetando el diseño previo?** No cambies colores, iconos ni lógica estable sin orden directa del usuario.

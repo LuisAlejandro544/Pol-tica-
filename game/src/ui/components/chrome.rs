@@ -22,7 +22,7 @@ pub fn render_top_hud(ui: &mut Ui, state: &GameState, sim_busy: bool) -> TopBarA
 
     egui::Frame::new()
         .fill(BG_PANEL)
-        .stroke(Stroke::new(1.0, BORDER_SUBTLE))
+        .stroke(Stroke::new(1.0_f32, BORDER_SUBTLE))
         .inner_margin(egui::Margin::symmetric(12, 8))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
@@ -129,7 +129,7 @@ pub fn render_bottom_nav(ui: &mut Ui, current: ScreenRoute) -> Option<ScreenRout
 
     egui::Frame::new()
         .fill(BG_PANEL)
-        .stroke(Stroke::new(1.0, BORDER_SUBTLE))
+        .stroke(Stroke::new(1.0_f32, BORDER_SUBTLE))
         .inner_margin(egui::Margin::symmetric(12, 8))
         .show(ui, |ui| {
             ui.horizontal_centered(|ui| {
@@ -142,7 +142,7 @@ pub fn render_bottom_nav(ui: &mut Ui, current: ScreenRoute) -> Option<ScreenRout
                     });
                     let btn = egui::Button::new(text)
                         .fill(if active { ACCENT_GOLD } else { BG_CARD })
-                        .stroke(Stroke::new(1.0, if active { ACCENT_GOLD } else { BORDER_SUBTLE }));
+                        .stroke(Stroke::new(1.0_f32, if active { ACCENT_GOLD } else { BORDER_SUBTLE }));
 
                     if ui.add_sized([148.0, 36.0], btn).clicked() {
                         next_route = Some(route);
@@ -161,11 +161,12 @@ pub fn render_event_popup(ctx: &egui::Context, event: &GameEvent) -> Option<usiz
         .collapsible(false)
         .resizable(false)
         .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-        .fixed_width(520.0)
+        .default_width(520.0)
+        .max_width(520.0)
         .frame(
             egui::Frame::window(&ctx.style())
                 .fill(BG_PANEL)
-                .stroke(Stroke::new(2.0, BORDER_BRASS)),
+                .stroke(Stroke::new(2.0_f32, BORDER_BRASS)),
         )
         .show(ctx, |ui| {
             ui.label(RichText::new(&event.description).size(14.0).color(TEXT_PRIMARY));

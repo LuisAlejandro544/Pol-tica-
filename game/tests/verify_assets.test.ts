@@ -49,14 +49,53 @@ test('Cargo.toml usa Rust 2024, Lua 5.4 vendored, wgpu 3D y solo licencias permi
   assert.ok(cargo.includes('edition = "2024"'));
   assert.ok(cargo.includes('lua54'));
   assert.ok(cargo.includes('vendored'));
-  assert.ok(cargo.includes('eframe'));
-  assert.ok(cargo.includes('"wgpu"'));
+  assert.ok(cargo.includes('eframe = { version = "0.32"'));
+  assert.ok(cargo.includes('wgpu = "25"'));
+  assert.ok(cargo.includes('mlua = { version = "0.11"'));
+  assert.ok(cargo.includes('roxmltree = "0.21"'));
+  assert.ok(cargo.includes('svgtypes = "0.16"'));
+  assert.ok(cargo.includes('rand = { version = "0.10"'));
   assert.ok(cargo.includes('glam ='));
   assert.ok(cargo.includes('bytemuck ='));
   assert.ok(cargo.includes('gltf = "1.4"'));
   assert.ok(cargo.includes('android-activity'));
-  assert.equal(/wgpu\s*=\s*\{[^}]*features\s*=\s*\[[^\]]*("gles"|"vulkan")/.test(cargo), false, 'wgpu 24 no usa features gles/vulkan en Cargo.toml');
+  assert.equal(/wgpu\s*=\s*\{[^}]*features\s*=\s*\[[^\]]*("gles"|"vulkan")/.test(cargo), false, 'wgpu no requiere features manuales gles/vulkan en Cargo.toml');
   assert.equal(/resvg|usvg|gpl|agpl/i.test(cargo), false, 'No debe incluir crates copyleft');
+});
+
+test('Correcciones Rust: AI MilitaryState, U16 GLB colors, Window max_width, Stroke _f32 y sin flags ARM inestables', () => {
+  const ai = fs.readFileSync(path.resolve('game/src/ai/mod.rs'), 'utf8');
+  const glbLoader = fs.readFileSync(path.resolve('game/src/map/glb_loader.rs'), 'utf8');
+  const chrome = fs.readFileSync(path.resolve('game/src/ui/components/chrome.rs'), 'utf8');
+  const mapScreen = fs.readFileSync(path.resolve('game/src/ui/screens/map_screen.rs'), 'utf8');
+  const cargoCfg = fs.readFileSync(path.resolve('game/.cargo/config.toml'), 'utf8');
+
+  assert.equal(ai.includes('economy.defense_budget_pct'), false, 'defense_budget_pct pertenece a MilitaryState');
+  assert.ok(ai.includes('country.military.defense_budget_pct'));
+  assert.ok(ai.includes('RngExt'), 'rand 0.10 usa RngExt');
+  assert.ok(glbLoader.includes('ReadColors::RgbU16') && glbLoader.includes('ReadColors::RgbaU16'));
+  assert.equal(chrome.includes('.fixed_width('), false, 'egui::Window no tiene .fixed_width()');
+  assert.equal(mapScreen.includes('.fixed_width('), false, 'egui::Window no tiene .fixed_width()');
+  assert.equal(/\+neon|\+vfp3/.test(cargoCfg), false, 'No usar -C target-feature=+neon,+vfp3 inestable en Rust estable');
+
+  // Verifica que ningún archivo UI use literales flotantes sin sufijo _f32 en Stroke::new(...)
+  const uiFiles = [
+    'game/src/ui/theme.rs',
+    'game/src/ui/components/chrome.rs',
+    'game/src/ui/components/map_canvas.rs',
+    'game/src/ui/screens/country_select.rs',
+    'game/src/ui/screens/diplomacy_screen.rs',
+    'game/src/ui/screens/economy_screen.rs',
+    'game/src/ui/screens/main_menu.rs',
+    'game/src/ui/screens/map_screen.rs',
+    'game/src/ui/screens/military_screen.rs',
+    'game/src/ui/screens/politics_screen.rs',
+    'game/src/ui/screens/settings_screen.rs',
+  ];
+  for (const file of uiFiles) {
+    const src = fs.readFileSync(path.resolve(file), 'utf8');
+    assert.equal(/Stroke::new\(\s*\d+\.\d+\s*,/.test(src), false, `Falta sufijo _f32 en Stroke::new en ${file}`);
+  }
 });
 
 test('Visor 3D Rust (glb_loader + renderer_3d + map_canvas) está integrado y documentado', () => {
@@ -116,8 +155,8 @@ test('GitHub Action de APK Debug está en /.github/workflows/, es manual, descar
   assert.ok(yml.includes('workflow_dispatch:'), 'Debe ser activable manualmente');
   assert.equal(/^\s*(push|pull_request|schedule):/m.test(yml), false, 'Nunca debe activarse con commits/push');
   assert.ok(yml.includes('gh release download'), 'Debe descargar mapa 3D y provincias desde Release');
-  assert.ok(yml.includes('actions/cache/restore@v4'), 'Debe restaurar caché');
-  assert.ok(yml.includes('actions/cache/save@v4'), 'Debe guardar caché obligatoriamente');
+  assert.ok(yml.includes('actions/cache/restore@v5'), 'Debe restaurar caché');
+  assert.ok(yml.includes('actions/cache/save@v5'), 'Debe guardar caché obligatoriamente');
   assert.ok(yml.includes('if: always()'), 'La caché debe guardarse incluso si falla un paso posterior');
   assert.ok(yml.includes('assembleDebug'), 'Debe compilar APK Debug');
   assert.ok(yml.includes('arm64-v8a'), 'Debe incluir build 64 bits');

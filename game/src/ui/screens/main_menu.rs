@@ -31,7 +31,7 @@ pub fn render_main_menu(
             ui.add_space(28.0);
             egui::Frame::new()
                 .fill(BG_PANEL)
-                .stroke(Stroke::new(1.5, BORDER_BRASS))
+                .stroke(Stroke::new(1.5_f32, BORDER_BRASS))
                 .corner_radius(10.0)
                 .inner_margin(24.0)
                 .show(ui, |ui| {
@@ -62,7 +62,7 @@ pub fn render_main_menu(
 
                     egui::Frame::new()
                         .fill(BG_CARD)
-                        .stroke(Stroke::new(1.0, BORDER_SUBTLE))
+                        .stroke(Stroke::new(1.0_f32, BORDER_SUBTLE))
                         .corner_radius(8.0)
                         .inner_margin(12.0)
                         .show(ui, |ui| {
@@ -80,7 +80,7 @@ pub fn render_main_menu(
             ui.add_space(36.0);
             egui::Frame::new()
                 .fill(BG_PANEL)
-                .stroke(Stroke::new(1.5, BORDER_SUBTLE))
+                .stroke(Stroke::new(1.5_f32, BORDER_SUBTLE))
                 .corner_radius(10.0)
                 .inner_margin(22.0)
                 .show(ui, |ui| {

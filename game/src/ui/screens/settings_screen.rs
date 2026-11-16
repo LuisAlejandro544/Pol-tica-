@@ -18,7 +18,7 @@ pub fn render_settings_screen(ui: &mut Ui, state: &mut GameState) -> SettingsAct
 
     egui::Frame::new()
         .fill(BG_PANEL)
-        .stroke(Stroke::new(1.0, BORDER_SUBTLE))
+        .stroke(Stroke::new(1.0_f32, BORDER_SUBTLE))
         .corner_radius(8.0)
         .inner_margin(16.0)
         .show(ui, |ui| {

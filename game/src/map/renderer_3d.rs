@@ -1,5 +1,5 @@
 //! Propósito del archivo:
-//! Renderizador 3D táctico en tiempo real (`wgpu 24` + `egui-wgpu 0.31`) para
+//! Renderizador 3D táctico en tiempo real (`wgpu 25` + `egui-wgpu 0.32`) para
 //! `latinoamerica_3d.glb`. Dibuja el continente entero con relieve andino, batimetría
 //! oceánica, fronteras, ríos y capitales en un único draw call con depth-buffer,
 //! iluminación direccional, modos de mapa dinámicos y resaltado de país/provincia.

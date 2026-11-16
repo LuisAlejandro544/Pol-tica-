@@ -39,7 +39,7 @@ pub fn render_map_screen(
         // Panel izquierdo compacto: Selector de modos de mapa y Crónica de la IA local
         egui::Frame::new()
             .fill(BG_PANEL)
-            .stroke(Stroke::new(1.0, BORDER_SUBTLE))
+            .stroke(Stroke::new(1.0_f32, BORDER_SUBTLE))
             .corner_radius(8.0)
             .inner_margin(10.0)
             .show(ui, |ui| {
@@ -121,11 +121,12 @@ pub fn render_map_screen(
                     .collapsible(false)
                     .resizable(false)
                     .anchor(egui::Align2::RIGHT_CENTER, [-18.0, 0.0])
-                    .fixed_width(310.0)
+                    .default_width(310.0)
+                    .max_width(310.0)
                     .frame(
                         egui::Frame::window(&ui.ctx().style())
                             .fill(BG_PANEL)
-                            .stroke(Stroke::new(1.5, BORDER_BRASS)),
+                            .stroke(Stroke::new(1.5_f32, BORDER_BRASS)),
                     )
                     .show(ui.ctx(), |ui| {
                         ui.label(RichText::new(format!("Capital: {}", country.capital)).color(TEXT_MUTED));

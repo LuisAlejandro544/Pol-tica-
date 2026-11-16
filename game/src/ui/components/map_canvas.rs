@@ -149,7 +149,7 @@ fn render_latam_map_3d(
     painter.rect_stroke(
         rect,
         8.0,
-        Stroke::new(1.5, BORDER_SUBTLE),
+        Stroke::new(1.5_f32, BORDER_SUBTLE),
         egui::StrokeKind::Inside,
     );
 
@@ -222,7 +222,7 @@ fn render_latam_map_2d(
     painter.rect_stroke(
         rect,
         8.0,
-        Stroke::new(1.5, BORDER_SUBTLE),
+        Stroke::new(1.5_f32, BORDER_SUBTLE),
         egui::StrokeKind::Inside,
     );
 
@@ -251,12 +251,12 @@ fn render_latam_map_2d(
     for gx in (0..=1000).step_by(100) {
         let p0 = to_screen(Pos2::new(gx as f32, 0.0));
         let p1 = to_screen(Pos2::new(gx as f32, vector_map.height));
-        painter.line_segment([p0, p1], Stroke::new(0.8, grid_color));
+        painter.line_segment([p0, p1], Stroke::new(0.8_f32, grid_color));
     }
     for gy in (0..=1200).step_by(100) {
         let p0 = to_screen(Pos2::new(0.0, gy as f32));
         let p1 = to_screen(Pos2::new(vector_map.width, gy as f32));
-        painter.line_segment([p0, p1], Stroke::new(0.8, grid_color));
+        painter.line_segment([p0, p1], Stroke::new(0.8_f32, grid_color));
     }
 
     for (id, mesh_data) in &vector_map.countries {
@@ -274,11 +274,11 @@ fn render_latam_map_2d(
 
         let screen_outline: Vec<Pos2> = mesh_data.outline.iter().map(|&p| to_screen(p)).collect();
         let stroke = if is_selected {
-            Stroke::new(2.6, ACCENT_GOLD)
+            Stroke::new(2.6_f32, ACCENT_GOLD)
         } else if is_player {
-            Stroke::new(2.2, ACCENT_CYAN)
+            Stroke::new(2.2_f32, ACCENT_CYAN)
         } else {
-            Stroke::new(1.1, BG_DEEP)
+            Stroke::new(1.1_f32, BG_DEEP)
         };
         painter.add(Shape::closed_line(screen_outline, stroke));
 

@@ -28,18 +28,18 @@ pub fn apply_tactical_theme(ctx: &egui::Context) {
     visuals.faint_bg_color = BG_CARD;
     visuals.extreme_bg_color = Color32::from_rgb(7, 13, 22);
     visuals.widgets.noninteractive.bg_fill = BG_CARD;
-    visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0, BORDER_SUBTLE);
-    visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, TEXT_PRIMARY);
+    visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, BORDER_SUBTLE);
+    visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0_f32, TEXT_PRIMARY);
 
     visuals.widgets.inactive.bg_fill = Color32::from_rgb(33, 53, 78);
-    visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, BORDER_SUBTLE);
+    visuals.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, BORDER_SUBTLE);
     visuals.widgets.inactive.corner_radius = CornerRadius::same(6);
 
     visuals.widgets.hovered.bg_fill = Color32::from_rgb(45, 73, 107);
-    visuals.widgets.hovered.bg_stroke = Stroke::new(1.5, ACCENT_GOLD);
+    visuals.widgets.hovered.bg_stroke = Stroke::new(1.5_f32, ACCENT_GOLD);
 
     visuals.widgets.active.bg_fill = Color32::from_rgb(58, 92, 132);
-    visuals.widgets.active.bg_stroke = Stroke::new(1.5, ACCENT_GOLD);
+    visuals.widgets.active.bg_stroke = Stroke::new(1.5_f32, ACCENT_GOLD);
 
     style.visuals = visuals;
     style.spacing.item_spacing = egui::vec2(10.0, 8.0);

@@ -5,9 +5,7 @@
 //! usando paralelismo con `rayon` sobre hilos de fondo (sin bloquear la UI).
 
 use crate::models::{AiPersonality, CountryState, Difficulty, GameState};
-use rand::SeedableRng;
-use rand::Rng;
-use rand_chacha::ChaCha8Rng;
+use rand::{rngs::ChaCha8Rng, RngExt, SeedableRng};
 use rayon::prelude::*;
 
 /// Decisión emitida por la IA local para aplicarse al estado global tras el cálculo paralelo.
@@ -73,7 +71,7 @@ fn decide_for_country(
     let mut interest = country.economy.interest_rate_pct;
     let mut infra = country.economy.infra_investment_pct;
     let mut social = country.economy.social_investment_pct;
-    let mut defense = country.economy.defense_budget_pct;
+    let mut defense = country.military.defense_budget_pct;
     let mut recruit_troops = 0_u64;
     let mut log_message = None;
 
@@ -175,7 +173,7 @@ pub fn apply_ai_decisions(state: &mut GameState, decisions: Vec<AiDecision>) {
         country.economy.interest_rate_pct = d.new_interest_rate;
         country.economy.infra_investment_pct = d.new_infra_pct;
         country.economy.social_investment_pct = d.new_social_pct;
-        country.economy.defense_budget_pct = d.new_defense_pct;
+        country.military.defense_budget_pct = d.new_defense_pct;
 
         if d.recruit_troops > 0 && country.economy.treasury_usd_millions > 300.0 {
             country.military.active_troops += d.recruit_troops;

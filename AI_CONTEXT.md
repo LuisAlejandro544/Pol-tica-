@@ -11,8 +11,8 @@ Este archivo resume el estado exacto, las decisiones arquitectónicas y las rest
 - **Entorno del usuario:** Trabaja únicamente desde un **teléfono móvil (sin PC)** y distribuirá el APK fuera de Google Play (por ejemplo en **Uptodown**).
 
 ## 2. Estado actual del motor
-- **Interfaz actual (`game/src/ui/`):** Usa `eframe` / `egui` (`0.31`) con arquitectura multipantalla (`MainMenu`, `CountrySelect`, `WorldMap`, `Economy`, `Politics`, `Diplomacy`, `Military`, `Settings`) y popups modales (`EventPopup`, `Popup País`).
-- **Visor 3D operativo (`wgpu 24` + `egui-wgpu 0.31` + `gltf 1.4`):** `game/src/map/glb_loader.rs` y `game/src/map/renderer_3d.rs` cargan `latinoamerica_3d.glb` junto a `scripts/provinces_latam.lua` (con respaldo automático SVG 2D si faltan), permitiendo pan/zoom/órbita táctil, 4 capas de mapa y raycasting 3D exacto por provincia y país.
+- **Interfaz actual (`game/src/ui/`):** Usa `eframe` / `egui` (`0.32`) con arquitectura multipantalla (`MainMenu`, `CountrySelect`, `WorldMap`, `Economy`, `Politics`, `Diplomacy`, `Military`, `Settings`) y popups modales (`EventPopup`, `Popup País`).
+- **Visor 3D operativo (`wgpu 25` + `egui-wgpu 0.32` + `gltf 1.4`):** `game/src/map/glb_loader.rs` y `game/src/map/renderer_3d.rs` cargan `latinoamerica_3d.glb` junto a `scripts/provinces_latam.lua` (con respaldo automático SVG 2D si faltan), permitiendo pan/zoom/órbita táctil, 4 capas de mapa y raycasting 3D exacto por provincia y país.
 - **Hilos y concurrencia:** La simulación mensual (fórmulas Lua 5.4 + IA local paralela con `rayon`) corre en un hilo separado (`SimulationWorker` en `game/src/engine/mod.rs`) usando `crossbeam-channel`, manteniendo el hilo de interfaz libre a 60 FPS.
 - **Seguridad 32/64 bits:** Los modelos en `game/src/models/mod.rs` usan `u64`, `i64` y `f64` explícitos (nunca `usize` para población o PIB) para evitar desbordamientos en 32 bits (`armeabi-v7a`) mientras ambos targets (`arm64-v8a` y `armeabi-v7a`) se compilan por separado.
 

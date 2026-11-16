@@ -6,7 +6,7 @@
 rustflags = ["-C", "link-arg=-Wl,-z,max-page-size=16384"]
 
 [target.armv7-linux-androideabi]
-rustflags = ["-C", "target-feature=+neon,+vfp3"]
+# Android NDK API 24+ ya provee la línea base armeabi-v7a/VFPv3 sin flags inestables -Ctarget-feature.
 
 [target.x86_64-linux-android]
 rustflags = ["-C", "link-arg=-Wl,-z,max-page-size=16384"]

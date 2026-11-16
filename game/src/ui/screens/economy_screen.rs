@@ -32,7 +32,7 @@ pub fn render_economy_screen(ui: &mut Ui, state: &mut GameState) {
         cols[0].vertical(|ui| {
             egui::Frame::new()
                 .fill(BG_PANEL)
-                .stroke(Stroke::new(1.5, BORDER_BRASS))
+                .stroke(Stroke::new(1.5_f32, BORDER_BRASS))
                 .corner_radius(8.0)
                 .inner_margin(14.0)
                 .show(ui, |ui| {
@@ -64,7 +64,7 @@ pub fn render_economy_screen(ui: &mut Ui, state: &mut GameState) {
 
             egui::Frame::new()
                 .fill(BG_PANEL)
-                .stroke(Stroke::new(1.0, BORDER_SUBTLE))
+                .stroke(Stroke::new(1.0_f32, BORDER_SUBTLE))
                 .corner_radius(8.0)
                 .inner_margin(14.0)
                 .show(ui, |ui| {
@@ -106,7 +106,7 @@ pub fn render_economy_screen(ui: &mut Ui, state: &mut GameState) {
         cols[1].vertical(|ui| {
             egui::Frame::new()
                 .fill(BG_PANEL)
-                .stroke(Stroke::new(1.0, BORDER_SUBTLE))
+                .stroke(Stroke::new(1.0_f32, BORDER_SUBTLE))
                 .corner_radius(8.0)
                 .inner_margin(14.0)
                 .show(ui, |ui| {

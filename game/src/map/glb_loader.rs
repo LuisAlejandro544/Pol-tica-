@@ -268,6 +268,16 @@ fn visit_node(
                         ]
                     })
                     .collect(),
+                Some(ReadColors::RgbU16(it)) => it
+                    .map(|c| {
+                        [
+                            (c[0] as f32 / 65535.0) * base_factor[0],
+                            (c[1] as f32 / 65535.0) * base_factor[1],
+                            (c[2] as f32 / 65535.0) * base_factor[2],
+                            base_factor[3],
+                        ]
+                    })
+                    .collect(),
                 Some(ReadColors::RgbF32(it)) => it
                     .map(|c| {
                         [
@@ -285,6 +295,16 @@ fn visit_node(
                             (c[1] as f32 / 255.0) * base_factor[1],
                             (c[2] as f32 / 255.0) * base_factor[2],
                             (c[3] as f32 / 255.0) * base_factor[3],
+                        ]
+                    })
+                    .collect(),
+                Some(ReadColors::RgbaU16(it)) => it
+                    .map(|c| {
+                        [
+                            (c[0] as f32 / 65535.0) * base_factor[0],
+                            (c[1] as f32 / 65535.0) * base_factor[1],
+                            (c[2] as f32 / 65535.0) * base_factor[2],
+                            (c[3] as f32 / 65535.0) * base_factor[3],
                         ]
                     })
                     .collect(),

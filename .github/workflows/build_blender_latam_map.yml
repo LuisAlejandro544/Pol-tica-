@@ -38,7 +38,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Descargar repositorio
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Instalar Lua 5.4 y utilidades base
         run: |
@@ -47,7 +47,7 @@ jobs:
 
       - name: Caché de Blender 4.3.2
         id: cache-blender
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.local/share/blender
           key: blender-linux-x64-4.3.2
@@ -106,7 +106,7 @@ jobs:
             game/assets/scripts/provinces_latam.lua
 
       - name: Subir mapa 3D (.glb) y provincias (.lua) como artefactos
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: latam-3d-blender-assets
           path: |
