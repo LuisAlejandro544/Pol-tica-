@@ -78,9 +78,11 @@ test('GitHub Action de Blender es estrictamente manual (solo workflow_dispatch) 
   assert.ok(yml.includes('workflow_dispatch:'), 'Debe tener workflow_dispatch');
   assert.equal(/^\s*(push|pull_request|schedule):/m.test(yml), false, 'No debe activarse automáticamente con push o PR');
   assert.ok(yml.includes('lua5.4'), 'Debe ejecutar Lua 5.4 en el Action');
+  assert.ok(yml.includes('--python-exit-code 1'), 'Blender debe propagar errores de Python');
   assert.ok(yml.includes('build_latam_map.py'), 'Debe ejecutar el script Blender Python');
 
   const py = fs.readFileSync(path.resolve('game/tools/blender/build_latam_map.py'), 'utf8');
+  assert.ok(py.includes('Matrix.Translation'), 'Debe usar mathutils.Matrix en create_cone');
   assert.ok(py.includes('ne_10m_admin_1_states_provinces.geojson'), 'Debe usar GeoJSON Admin-1 de provincias');
   assert.ok(py.includes('ne_10m_rivers_lake_centerlines.geojson'), 'Debe incluir ríos principales');
   assert.ok(py.includes('srgb_channel_to_linear'), 'Debe convertir colores sRGB a Linear');

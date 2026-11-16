@@ -51,7 +51,7 @@ jobs:
 
       - name: Paso Blender Python — Construir mapa 3D (.glb) y provinces_latam.lua desde GeoJSON
         run: |
-          blender --background --python game/tools/blender/build_latam_map.py -- \
+          blender --background --python-exit-code 1 --python game/tools/blender/build_latam_map.py -- \
             --countries-json /tmp/latam_countries.json \
             --out-glb game/assets/maps/latinoamerica_3d.glb \
             --out-lua game/assets/scripts/provinces_latam.lua \

@@ -22,7 +22,7 @@ import urllib.request
 
 import bpy
 import bmesh
-from mathutils import Vector
+from mathutils import Matrix, Vector
 
 # Fuentes GeoJSON de Dominio Público (Natural Earth Vector - sin requerir atribución)
 URL_ADMIN1_GEOJSON = (
@@ -375,8 +375,8 @@ def build_province_mesh(
         return None
 
     # Triangular primero para poder subdividir triángulos largos y esculpir relieve continuo
-    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
-    bmesh.ops.triangulate(bm, faces=bm.faces, quad_method="BEAUTY", ngon_method="BEAUTY")
+    bmesh.ops.recalc_face_normals(bm, faces=list(bm.faces))
+    bmesh.ops.triangulate(bm, faces=list(bm.faces), quad_method="BEAUTY", ngon_method="BEAUTY")
 
     # Subdividir aristas superiores largas (> 1.4 unidades) para que los Andes tengan curvas suaves
     for _pass in range(2):
@@ -390,7 +390,7 @@ def build_province_mesh(
         if not long_top_edges:
             break
         bmesh.ops.subdivide_edges(bm, edges=long_top_edges, cuts=1)
-        bmesh.ops.triangulate(bm, faces=bm.faces, quad_method="BEAUTY", ngon_method="BEAUTY")
+        bmesh.ops.triangulate(bm, faces=list(bm.faces), quad_method="BEAUTY", ngon_method="BEAUTY")
 
     # Aplicar relieve topográfico continuo a cada vértice superior según su (lon, lat)
     for v in bm.verts:
@@ -401,8 +401,8 @@ def build_province_mesh(
             elev_samples.append(rel)
 
     # Limpiar aristas/triángulos degenerados de área cero
-    bmesh.ops.dissolve_degenerate(bm, dist=0.002, edges=bm.edges)
-    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+    bmesh.ops.dissolve_degenerate(bm, dist=0.002, edges=list(bm.edges))
+    bmesh.ops.recalc_face_normals(bm, faces=list(bm.faces))
 
     mesh = bpy.data.meshes.new(mesh_name)
     bm.to_mesh(mesh)
@@ -512,7 +512,7 @@ def build_borders_layers(
         if not bm.faces:
             bm.free()
             return
-        bmesh.ops.triangulate(bm, faces=bm.faces)
+        bmesh.ops.triangulate(bm, faces=list(bm.faces))
         mesh = bpy.data.meshes.new(f"{obj_name}_MESH")
         bm.to_mesh(mesh)
         bm.free()
@@ -575,7 +575,7 @@ def build_rivers_layer(rivers_path: str, base_extrude: float, collection):
                 add_ribbon_segment_to_bmesh(bm, p0, p1, width=width, z0=z0, z1=z1)
 
     if bm.faces:
-        bmesh.ops.triangulate(bm, faces=bm.faces)
+        bmesh.ops.triangulate(bm, faces=list(bm.faces))
         mesh = bpy.data.meshes.new("RIVERS_LATAM_MESH")
         bm.to_mesh(mesh)
         obj = bpy.data.objects.new("RIVERS_LATAM", mesh)
@@ -651,7 +651,8 @@ def create_bathymetric_ocean_and_grid(land_points: list[tuple[float, float]], co
             1.0,
         )
 
-    # Precomputar color por vértice
+    # Precomputar color por vértice (actualizar índices antes de indexar)
+    bm.verts.index_update()
     vert_colors = {}
     for v in bm.verts:
         d = dist_to_land(v.co.x, v.co.y)
@@ -663,12 +664,11 @@ def create_bathymetric_ocean_and_grid(land_points: list[tuple[float, float]], co
             col = deep
         vert_colors[v.index] = col
 
-    bm.verts.index_update()
     for f in bm.faces:
         for loop in f.loops:
             loop[color_layer] = vert_colors[loop.vert.index]
 
-    bmesh.ops.triangulate(bm, faces=bm.faces)
+    bmesh.ops.triangulate(bm, faces=list(bm.faces))
     ocean_mesh = bpy.data.meshes.new("OCEAN_BASE_MESH")
     bm.to_mesh(ocean_mesh)
     bm.free()
@@ -704,7 +704,7 @@ def create_bathymetric_ocean_and_grid(land_points: list[tuple[float, float]], co
         add_ribbon_segment_to_bmesh(bm_tropics, corners[i], corners[(i + 1) % 4], width=0.35, z0=0.02, z1=0.02)
 
     if bm_grid.faces:
-        bmesh.ops.triangulate(bm_grid, faces=bm_grid.faces)
+        bmesh.ops.triangulate(bm_grid, faces=list(bm_grid.faces))
         gm = bpy.data.meshes.new("MAP_GRID_LINES_MESH")
         bm_grid.to_mesh(gm)
         go = bpy.data.objects.new("MAP_GRID_LINES", gm)
@@ -713,7 +713,7 @@ def create_bathymetric_ocean_and_grid(land_points: list[tuple[float, float]], co
     bm_grid.free()
 
     if bm_tropics.faces:
-        bmesh.ops.triangulate(bm_tropics, faces=bm_tropics.faces)
+        bmesh.ops.triangulate(bm_tropics, faces=list(bm_tropics.faces))
         tm = bpy.data.meshes.new("MAP_TROPICS_FRAME_MESH")
         bm_tropics.to_mesh(tm)
         to = bpy.data.objects.new("MAP_TROPICS_FRAME", tm)
@@ -746,7 +746,7 @@ def create_capital_marker(
             radius1=0.46,
             radius2=0.38,
             depth=0.16,
-            matrix=((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0.08), (0, 0, 0, 1)),
+            matrix=Matrix.Translation((0.0, 0.0, 0.08)),
         )
         # Torre obelisco
         bmesh.ops.create_cone(
@@ -757,7 +757,7 @@ def create_capital_marker(
             radius1=0.24,
             radius2=0.04,
             depth=1.05,
-            matrix=((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0.68), (0, 0, 0, 1)),
+            matrix=Matrix.Translation((0.0, 0.0, 0.68)),
         )
     else:
         bmesh.ops.create_cone(
@@ -768,7 +768,7 @@ def create_capital_marker(
             radius1=0.22,
             radius2=0.18,
             depth=0.08,
-            matrix=((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0.04), (0, 0, 0, 1)),
+            matrix=Matrix.Translation((0.0, 0.0, 0.04)),
         )
         bmesh.ops.create_cone(
             bm,
@@ -778,7 +778,7 @@ def create_capital_marker(
             radius1=0.12,
             radius2=0.02,
             depth=0.45,
-            matrix=((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0.30), (0, 0, 0, 1)),
+            matrix=Matrix.Translation((0.0, 0.0, 0.30)),
         )
 
     mesh = bpy.data.meshes.new(f"{node_name}_MESH")
