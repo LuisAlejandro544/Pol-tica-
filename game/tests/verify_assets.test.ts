@@ -238,3 +238,41 @@ test('UI móvil: scroll táctil habilitado, sin colisiones de ScrollArea ID y co
   assert.ok(countrySelect.includes('Layout::top_down'), 'country_select debe usar Layout::top_down en sus columnas');
   assert.ok(mapScreen.includes('Layout::top_down'), 'map_screen debe usar Layout::top_down en sus columnas');
 });
+
+test('Protección anti-crash del visor 3D en Android (wgpu target_format vivo, límites GPU, catch_unwind y respaldo 2D)', () => {
+  const uiMod = fs.readFileSync(path.resolve('game/src/ui/mod.rs'), 'utf8');
+  const renderer3d = fs.readFileSync(path.resolve('game/src/map/renderer_3d.rs'), 'utf8');
+  const glbLoader = fs.readFileSync(path.resolve('game/src/map/glb_loader.rs'), 'utf8');
+  const mapCanvas = fs.readFileSync(path.resolve('game/src/ui/components/map_canvas.rs'), 'utf8');
+  const settings = fs.readFileSync(path.resolve('game/src/ui/screens/settings_screen.rs'), 'utf8');
+
+  assert.ok(uiMod.includes('frame.wgpu_render_state()'), 'ui/mod.rs debe sincronizar target_format en cada frame');
+  assert.ok(uiMod.includes('gpu_3d_failed'), 'ui/mod.rs debe activar respaldo 2D automático si falla la GPU 3D');
+  assert.ok(renderer3d.includes('sync_target_format'), 'renderer_3d.rs debe reconstruir blit_pipeline si cambia target_format');
+  assert.ok(renderer3d.includes('device.limits()'), 'renderer_3d.rs debe respetar límites de textura y buffer de la GPU móvil');
+  assert.ok(renderer3d.includes('catch_unwind'), 'renderer_3d.rs debe capturar panics de driver GPU sin cerrar la app');
+  assert.equal(renderer3d.includes('positions[vid]'), false, 'SHADER_BLIT_WGSL no debe usar indexado dinámico en array local');
+  assert.ok(glbLoader.includes('pm.positions.get('), 'glb_loader.rs debe usar indexado seguro con .get()');
+  assert.ok(glbLoader.includes('raw_normals.get('), 'glb_loader.rs debe proteger lectura de normales');
+  assert.ok(mapCanvas.includes('rect.is_positive()'), 'map_canvas.rs debe validar rect antes de crear PaintCallback');
+  assert.ok(settings.includes('Mapa 2D (SVG táctil)'), 'settings_screen.rs debe permitir alternar entre mapa 3D y 2D SVG');
+
+  for (const file of [
+    'game/src/ui/mod.rs',
+    'game/src/map/renderer_3d.rs',
+    'game/src/map/glb_loader.rs',
+  ]) {
+    const src = fs.readFileSync(path.resolve(file), 'utf8');
+    let braces = 0;
+    let parens = 0;
+    for (const ch of src) {
+      if (ch === '{') braces++;
+      else if (ch === '}') braces--;
+      else if (ch === '(') parens++;
+      else if (ch === ')') parens--;
+    }
+    assert.equal(braces, 0, `Llaves desbalanceadas en ${file}`);
+    assert.equal(parens, 0, `Paréntesis desbalanceados en ${file}`);
+  }
+});
+

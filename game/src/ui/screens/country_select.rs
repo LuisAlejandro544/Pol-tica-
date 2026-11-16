@@ -15,6 +15,8 @@ use crate::ui::theme::{
 };
 use eframe::egui_wgpu::wgpu;
 use egui::{Align, Color32, Layout, RichText, Stroke, Ui};
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 
 pub enum CountrySelectAction {
     None,
@@ -26,6 +28,7 @@ pub fn render_country_select(
     ui: &mut Ui,
     scene_3d: Option<&Latam3dScene>,
     target_format: wgpu::TextureFormat,
+    gpu_3d_failed: &Arc<AtomicBool>,
     vector_map: &LatamVectorMap,
     state: &mut GameState,
     viewport: &mut MapViewportState,
@@ -63,9 +66,15 @@ pub fn render_country_select(
 
     // Distribución horizontal en 3 columnas proporcionales con Layout::top_down explícito en cada una
     let avail = ui.available_size();
-    let list_w = (avail.x * 0.22).clamp(155.0, 210.0);
-    let dossier_w = (avail.x * 0.34).clamp(245.0, 350.0);
-    let map_w = (avail.x - list_w - dossier_w - 20.0).max(200.0);
+    let usable_w = (avail.x - 16.0).max(480.0);
+    let mut list_w = (usable_w * 0.22).clamp(140.0, 210.0);
+    let mut dossier_w = (usable_w * 0.34).clamp(220.0, 350.0);
+    if list_w + dossier_w + 180.0 > usable_w {
+        let excess = (list_w + dossier_w + 180.0) - usable_w;
+        dossier_w = (dossier_w - excess * 0.65).max(185.0);
+        list_w = (list_w - excess * 0.35).max(130.0);
+    }
+    let map_w = (usable_w - list_w - dossier_w).max(160.0);
     let col_h = (avail.y - 6.0).max(180.0);
 
     ui.horizontal(|ui| {
@@ -137,6 +146,7 @@ pub fn render_country_select(
                     ui,
                     scene_3d,
                     target_format,
+                    gpu_3d_failed,
                     vector_map,
                     state,
                     MapMode::Political,

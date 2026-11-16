@@ -169,9 +169,13 @@ impl Latam3dScene {
                 continue;
             }
             for tri in pm.indices.chunks_exact(3) {
-                let v0 = pm.positions[tri[0] as usize];
-                let v1 = pm.positions[tri[1] as usize];
-                let v2 = pm.positions[tri[2] as usize];
+                let (Some(&v0), Some(&v1), Some(&v2)) = (
+                    pm.positions.get(tri[0] as usize),
+                    pm.positions.get(tri[1] as usize),
+                    pm.positions.get(tri[2] as usize),
+                ) else {
+                    continue;
+                };
                 if let Some(t) = ray_triangle_intersect(ray_origin, dir_norm, v0, v1, v2) {
                     if t > 0.0 && t < best_t {
                         best_t = t;
@@ -239,7 +243,7 @@ fn visit_node(
             if primitive.mode() != gltf::mesh::Mode::Triangles {
                 continue;
             }
-            let reader = primitive.reader(|buffer| Some(&buffers[buffer.index()]));
+            let reader = primitive.reader(|buffer| buffers.get(buffer.index()));
             let Some(pos_iter) = reader.read_positions() else {
                 continue;
             };
@@ -340,9 +344,11 @@ fn visit_node(
             let base_pick_vertex = pick_positions.len() as u32;
             let is_province = matches!(kind, MeshKind::Province { .. });
 
+            let pos_count = raw_positions.len() as u32;
             for i in 0..raw_positions.len() {
                 let wp = world.transform_point3(Vec3::from(raw_positions[i]));
-                let wn = (normal_mat * Vec3::from(raw_normals[i])).normalize_or_zero();
+                let raw_n = raw_normals.get(i).copied().unwrap_or([0.0, 1.0, 0.0]);
+                let wn = (normal_mat * Vec3::from(raw_n)).normalize_or_zero();
                 let col = *vertex_colors.get(i).unwrap_or(&[0.5, 0.5, 0.5, 1.0]);
 
                 *bounds_min = bounds_min.min(wp);
@@ -363,9 +369,11 @@ fn visit_node(
             }
 
             for idx in prim_indices {
-                out_indices.push(base_global_vertex + idx);
-                if is_province {
-                    pick_indices.push(base_pick_vertex + idx);
+                if idx < pos_count {
+                    out_indices.push(base_global_vertex + idx);
+                    if is_province {
+                        pick_indices.push(base_pick_vertex + idx);
+                    }
                 }
             }
         }

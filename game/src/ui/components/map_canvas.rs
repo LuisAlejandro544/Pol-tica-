@@ -12,6 +12,8 @@ use crate::ui::theme::{
 };
 use eframe::egui_wgpu::{self, wgpu};
 use egui::{Color32, FontId, Mesh, Pos2, Rect, Sense, Shape, Stroke, Ui, Vec2};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 pub struct MapPickHit {
     pub country_id: String,
@@ -39,13 +41,27 @@ pub fn render_latam_map(
     ui: &mut Ui,
     scene_3d: Option<&Latam3dScene>,
     target_format: wgpu::TextureFormat,
+    gpu_3d_failed: &Arc<AtomicBool>,
     vector_map: &LatamVectorMap,
     state: &GameState,
     map_mode: MapMode,
     viewport: &mut MapViewportState,
 ) -> Option<MapPickHit> {
     if let Some(scene) = scene_3d {
-        return render_latam_map_3d(ui, scene, target_format, state, map_mode, viewport);
+        if !gpu_3d_failed.load(Ordering::Relaxed)
+            && !scene.vertices.is_empty()
+            && !scene.indices.is_empty()
+        {
+            return render_latam_map_3d(
+                ui,
+                scene,
+                target_format,
+                gpu_3d_failed,
+                state,
+                map_mode,
+                viewport,
+            );
+        }
     }
     render_latam_map_2d(ui, vector_map, state, map_mode, viewport)
 }
@@ -54,13 +70,19 @@ fn render_latam_map_3d(
     ui: &mut Ui,
     scene: &Latam3dScene,
     target_format: wgpu::TextureFormat,
+    gpu_3d_failed: &Arc<AtomicBool>,
     state: &GameState,
     map_mode: MapMode,
     viewport: &mut MapViewportState,
 ) -> Option<MapPickHit> {
     let available = ui.available_size();
-    let (rect, response) = ui.allocate_exact_size(available, Sense::click_and_drag());
+    let safe_size = Vec2::new(
+        if available.x.is_finite() { available.x.max(16.0) } else { 320.0 },
+        if available.y.is_finite() { available.y.max(16.0) } else { 240.0 },
+    );
+    let (rect, response) = ui.allocate_exact_size(safe_size, Sense::click_and_drag());
     let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, 8.0, Color32::from_rgb(8, 22, 38));
 
     // Gestos táctiles y de ratón sobre el visor 3D
     if response.hovered() {
@@ -122,9 +144,9 @@ fn render_latam_map_3d(
     let aspect = (rect.width() / rect.height().max(1.0)).max(0.1);
     let view_proj = viewport.camera_3d.view_proj(aspect);
     let eye = viewport.camera_3d.eye_position();
-    let ppp = ui.ctx().pixels_per_point();
-    let vp_w = ((rect.width() * ppp).round() as u32).max(64);
-    let vp_h = ((rect.height() * ppp).round() as u32).max(64);
+    let ppp = ui.ctx().pixels_per_point().clamp(0.5, 4.0);
+    let vp_w = ((rect.width() * ppp).round() as u32).clamp(64, 2048);
+    let vp_h = ((rect.height() * ppp).round() as u32).clamp(64, 2048);
 
     let uniforms = MapUniforms {
         view_proj: view_proj.to_cols_array_2d(),
@@ -133,17 +155,20 @@ fn render_latam_map_3d(
         country_palette,
     };
 
-    let callback = egui_wgpu::Callback::new_paint_callback(
-        rect,
-        Map3dPaintCallback {
-            vertices: scene.vertices.clone(),
-            indices: scene.indices.clone(),
-            uniforms,
-            target_format,
-            viewport_px: [vp_w, vp_h],
-        },
-    );
-    painter.add(callback);
+    if rect.is_positive() && rect.width() >= 16.0 && rect.height() >= 16.0 {
+        let callback = egui_wgpu::Callback::new_paint_callback(
+            rect,
+            Map3dPaintCallback {
+                vertices: scene.vertices.clone(),
+                indices: scene.indices.clone(),
+                uniforms,
+                target_format,
+                viewport_px: [vp_w, vp_h],
+                gpu_3d_failed: Arc::clone(gpu_3d_failed),
+            },
+        );
+        painter.add(callback);
+    }
 
     // Marco sutil cartográfico alrededor del visor 3D
     painter.rect_stroke(
@@ -154,13 +179,13 @@ fn render_latam_map_3d(
     );
 
     // Controles táctiles flotantes en la esquina inferior derecha del visor 3D
-    let bar_w = 278.0;
+    let bar_w = (rect.width() - 16.0).clamp(150.0, 278.0);
     let btn_rect = Rect::from_min_size(
-        rect.right_bottom() - Vec2::new(bar_w + 10.0, 44.0),
+        rect.right_bottom() - Vec2::new(bar_w + 8.0, 44.0),
         Vec2::new(bar_w, 34.0),
     );
     let mut ui_child = ui.new_child(egui::UiBuilder::new().max_rect(btn_rect));
-    ui_child.horizontal(|ui| {
+    ui_child.horizontal_wrapped(|ui| {
         if ui.small_button(" + ").clicked() {
             viewport.camera_3d.zoom_by_factor(1.24);
         }
@@ -215,7 +240,11 @@ fn render_latam_map_2d(
     viewport: &mut MapViewportState,
 ) -> Option<MapPickHit> {
     let available = ui.available_size();
-    let (rect, response) = ui.allocate_exact_size(available, Sense::click_and_drag());
+    let safe_size = Vec2::new(
+        if available.x.is_finite() { available.x.max(16.0) } else { 320.0 },
+        if available.y.is_finite() { available.y.max(16.0) } else { 240.0 },
+    );
+    let (rect, response) = ui.allocate_exact_size(safe_size, Sense::click_and_drag());
 
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 8.0, Color32::from_rgb(10, 26, 44));
@@ -235,9 +264,10 @@ fn render_latam_map_2d(
         viewport.zoom = (viewport.zoom * factor).clamp(0.75, 4.5);
     }
 
-    let base_scale = (rect.width() / vector_map.width)
-        .min(rect.height() / vector_map.height)
-        * 0.94;
+    let base_scale = ((rect.width() / vector_map.width.max(1.0))
+        .min(rect.height() / vector_map.height.max(1.0))
+        * 0.94)
+        .max(0.05);
     let scale = base_scale * viewport.zoom;
     let map_pixel_size = Vec2::new(vector_map.width * scale, vector_map.height * scale);
     let origin = rect.center() - map_pixel_size * 0.5 + viewport.pan;

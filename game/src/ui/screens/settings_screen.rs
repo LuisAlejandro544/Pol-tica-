@@ -13,7 +13,12 @@ pub enum SettingsAction {
     RestartSelectCountry,
 }
 
-pub fn render_settings_screen(ui: &mut Ui, state: &mut GameState) -> SettingsAction {
+pub fn render_settings_screen(
+    ui: &mut Ui,
+    state: &mut GameState,
+    has_3d_scene: bool,
+    use_3d_map: &mut bool,
+) -> SettingsAction {
     let mut action = SettingsAction::None;
 
     egui::ScrollArea::vertical()
@@ -45,6 +50,19 @@ pub fn render_settings_screen(ui: &mut Ui, state: &mut GameState) -> SettingsAct
                             if ui.selectable_label(state.difficulty == diff, lbl).clicked() {
                                 state.difficulty = diff;
                             }
+                        }
+                    });
+
+                    ui.add_space(10.0);
+                    ui.label(RichText::new("Modo del Visor Cartográfico").strong());
+                    ui.horizontal(|ui| {
+                        if has_3d_scene {
+                            if ui.selectable_label(*use_3d_map, "Mapa 3D (wgpu)").clicked() {
+                                *use_3d_map = true;
+                            }
+                        }
+                        if ui.selectable_label(!*use_3d_map, "Mapa 2D (SVG táctil)").clicked() {
+                            *use_3d_map = false;
                         }
                     });
 

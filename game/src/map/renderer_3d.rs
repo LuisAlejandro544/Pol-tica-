@@ -8,6 +8,7 @@ use crate::map::glb_loader::Vertex3D;
 use bytemuck::{Pod, Zeroable};
 use eframe::egui_wgpu::{self, wgpu};
 use glam::{Mat4, Vec3, Vec4};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 #[derive(Debug, Clone)]
@@ -136,6 +137,12 @@ pub struct Map3dPaintCallback {
     pub uniforms: MapUniforms,
     pub target_format: wgpu::TextureFormat,
     pub viewport_px: [u32; 2],
+    pub gpu_3d_failed: Arc<AtomicBool>,
+}
+
+enum Map3dGpuState {
+    Ready(Map3dGpuResources),
+    Failed,
 }
 
 struct Map3dGpuResources {
@@ -156,11 +163,45 @@ struct Map3dGpuResources {
     blit_bind_group_layout: wgpu::BindGroupLayout,
     blit_bind_group: wgpu::BindGroup,
     blit_uniform_buffer: wgpu::Buffer,
+    blit_shader: wgpu::ShaderModule,
+    blit_pipeline_layout: wgpu::PipelineLayout,
     blit_pipeline: wgpu::RenderPipeline,
     target_format: wgpu::TextureFormat,
 }
 
 impl Map3dGpuResources {
+    fn try_new(
+        device: &wgpu::Device,
+        vertices: &[Vertex3D],
+        indices: &[u32],
+        initial_size: [u32; 2],
+        target_format: wgpu::TextureFormat,
+    ) -> Result<Self, String> {
+        if vertices.is_empty() || indices.is_empty() {
+            return Err("Geometría 3D vacía para wgpu".to_string());
+        }
+        let limits = device.limits();
+        let vb_bytes = std::mem::size_of_val(vertices) as u64;
+        let ib_bytes = std::mem::size_of_val(indices) as u64;
+        if vb_bytes > limits.max_buffer_size || ib_bytes > limits.max_buffer_size {
+            return Err(format!(
+                "Buffers 3D exceden max_buffer_size ({})",
+                limits.max_buffer_size
+            ));
+        }
+
+        let max_tex = limits.max_texture_dimension_2d.min(2048).max(64);
+        let safe_size = [
+            initial_size[0].clamp(64, max_tex),
+            initial_size[1].clamp(64, max_tex),
+        ];
+
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            Self::new(device, vertices, indices, safe_size, target_format)
+        }))
+        .map_err(|_| "Fallo inicializando pipeline wgpu 3D en esta GPU móvil".to_string())
+    }
+
     fn new(
         device: &wgpu::Device,
         vertices: &[Vertex3D],
@@ -368,31 +409,8 @@ impl Map3dGpuResources {
             push_constant_ranges: &[],
         });
 
-        let blit_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("latam_blit_pipeline"),
-            layout: Some(&blit_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &blit_shader,
-                entry_point: Some("vs_main"),
-                buffers: &[],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            },
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &blit_shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: target_format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            }),
-            multiview: None,
-            cache: None,
-        });
+        let blit_pipeline =
+            create_blit_pipeline(device, &blit_pipeline_layout, &blit_shader, target_format);
 
         Self {
             vertex_buffer,
@@ -410,23 +428,60 @@ impl Map3dGpuResources {
             blit_bind_group_layout,
             blit_bind_group,
             blit_uniform_buffer,
+            blit_shader,
+            blit_pipeline_layout,
             blit_pipeline,
             target_format,
         }
     }
 
-    fn ensure_size(&mut self, device: &wgpu::Device, width: u32, height: u32) {
-        let w = width.clamp(64, 4096);
-        let h = height.clamp(64, 4096);
-        if self.offscreen_size == [w, h] {
-            return;
+    fn sync_target_format(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        new_format: wgpu::TextureFormat,
+    ) -> Result<(), String> {
+        if self.target_format == new_format {
+            return Ok(());
         }
-        let (color_texture, color_view, depth_texture, depth_view) =
-            create_offscreen_targets(device, w, h);
-        self.color_texture = color_texture;
-        self.color_view = color_view;
-        self.depth_texture = depth_texture;
-        self.depth_view = depth_view;
+        let blit_uniform_data = BlitUniforms {
+            encode_srgb: if new_format.is_srgb() { 0.0 } else { 1.0 },
+            _pad: [0.0; 3],
+        };
+        queue.write_buffer(
+            &self.blit_uniform_buffer,
+            0,
+            bytemuck::bytes_of(&blit_uniform_data),
+        );
+        let new_pipeline = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            create_blit_pipeline(
+                device,
+                &self.blit_pipeline_layout,
+                &self.blit_shader,
+                new_format,
+            )
+        }))
+        .map_err(|_| "No se pudo adaptar blit_pipeline al formato de superficie".to_string())?;
+        self.blit_pipeline = new_pipeline;
+        self.target_format = new_format;
+        Ok(())
+    }
+
+    fn ensure_size(&mut self, device: &wgpu::Device, width: u32, height: u32) -> Result<(), String> {
+        let max_dim = device.limits().max_texture_dimension_2d.min(2048).max(64);
+        let w = width.clamp(64, max_dim);
+        let h = height.clamp(64, max_dim);
+        if self.offscreen_size == [w, h] {
+            return Ok(());
+        }
+        let targets = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            create_offscreen_targets(device, w, h)
+        }))
+        .map_err(|_| "No se pudieron crear texturas offscreen 3D".to_string())?;
+        self.color_texture = targets.0;
+        self.color_view = targets.1;
+        self.depth_texture = targets.2;
+        self.depth_view = targets.3;
         self.offscreen_size = [w, h];
         self.blit_bind_group = create_blit_bind_group(
             device,
@@ -435,6 +490,7 @@ impl Map3dGpuResources {
             &self.blit_sampler,
             &self.blit_uniform_buffer,
         );
+        Ok(())
     }
 }
 
@@ -447,21 +503,51 @@ impl egui_wgpu::CallbackTrait for Map3dPaintCallback {
         egui_encoder: &mut wgpu::CommandEncoder,
         callback_resources: &mut egui_wgpu::CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
-        let target_w = self.viewport_px[0].max(64);
-        let target_h = self.viewport_px[1].max(64);
+        let max_dim = device.limits().max_texture_dimension_2d.min(2048).max(64);
+        let target_w = self.viewport_px[0].clamp(64, max_dim);
+        let target_h = self.viewport_px[1].clamp(64, max_dim);
 
-        let res = callback_resources.entry::<Map3dGpuResources>().or_insert_with(|| {
-            Map3dGpuResources::new(
-                device,
-                &self.vertices,
-                &self.indices,
-                [target_w, target_h],
-                self.target_format,
-            )
-        });
+        let gpu_state = callback_resources
+            .entry::<Map3dGpuState>()
+            .or_insert_with(|| {
+                match Map3dGpuResources::try_new(
+                    device,
+                    &self.vertices,
+                    &self.indices,
+                    [target_w, target_h],
+                    self.target_format,
+                ) {
+                    Ok(res) => Map3dGpuState::Ready(res),
+                    Err(err) => {
+                        log::error!("Desactivando mapa 3D por error de GPU: {err}");
+                        self.gpu_3d_failed.store(true, Ordering::Relaxed);
+                        Map3dGpuState::Failed
+                    }
+                }
+            });
 
-        let _ = res.target_format;
-        res.ensure_size(device, target_w, target_h);
+        let Map3dGpuState::Ready(res) = gpu_state else {
+            self.gpu_3d_failed.store(true, Ordering::Relaxed);
+            return Vec::new();
+        };
+
+        if let Err(err) = res.sync_target_format(device, queue, self.target_format) {
+            log::error!("Error sincronizando target_format 3D: {err}");
+            *gpu_state = Map3dGpuState::Failed;
+            self.gpu_3d_failed.store(true, Ordering::Relaxed);
+            return Vec::new();
+        }
+
+        if let Err(err) = res.ensure_size(device, target_w, target_h) {
+            log::error!("Error redimensionando offscreen 3D: {err}");
+            *gpu_state = Map3dGpuState::Failed;
+            self.gpu_3d_failed.store(true, Ordering::Relaxed);
+            return Vec::new();
+        }
+
+        if res.index_count == 0 {
+            return Vec::new();
+        }
 
         queue.write_buffer(&res.uniform_buffer, 0, bytemuck::bytes_of(&self.uniforms));
 
@@ -509,12 +595,47 @@ impl egui_wgpu::CallbackTrait for Map3dPaintCallback {
         render_pass: &mut wgpu::RenderPass<'static>,
         callback_resources: &egui_wgpu::CallbackResources,
     ) {
-        if let Some(res) = callback_resources.get::<Map3dGpuResources>() {
-            render_pass.set_pipeline(&res.blit_pipeline);
-            render_pass.set_bind_group(0, &res.blit_bind_group, &[]);
-            render_pass.draw(0..3, 0..1);
+        if let Some(Map3dGpuState::Ready(res)) = callback_resources.get::<Map3dGpuState>() {
+            if res.target_format == self.target_format && res.index_count > 0 {
+                render_pass.set_pipeline(&res.blit_pipeline);
+                render_pass.set_bind_group(0, &res.blit_bind_group, &[]);
+                render_pass.draw(0..3, 0..1);
+            }
         }
     }
+}
+
+fn create_blit_pipeline(
+    device: &wgpu::Device,
+    layout: &wgpu::PipelineLayout,
+    shader: &wgpu::ShaderModule,
+    target_format: wgpu::TextureFormat,
+) -> wgpu::RenderPipeline {
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("latam_blit_pipeline"),
+        layout: Some(layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some("vs_main"),
+            buffers: &[],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        },
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some("fs_main"),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: target_format,
+                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        }),
+        multiview: None,
+        cache: None,
+    })
 }
 
 fn create_buffer_with_data(
@@ -684,7 +805,8 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         }
     }
 
-    let n = normalize(in.world_normal);
+    let n_len = length(in.world_normal);
+    let n = select(vec3<f32>(0.0, 1.0, 0.0), in.world_normal / n_len, n_len > 0.00001);
     let sun_dir = normalize(vec3<f32>(0.42, 0.84, 0.34));
     let rim_dir = normalize(vec3<f32>(-0.45, 0.55, -0.50));
 
@@ -717,19 +839,11 @@ struct VsOut {
 
 @vertex
 fn vs_main(@builtin(vertex_index) vid: u32) -> VsOut {
-    var positions = array<vec2<f32>, 3>(
-        vec2<f32>(-1.0, -1.0),
-        vec2<f32>( 3.0, -1.0),
-        vec2<f32>(-1.0,  3.0),
-    );
-    var uvs = array<vec2<f32>, 3>(
-        vec2<f32>(0.0, 1.0),
-        vec2<f32>(2.0, 1.0),
-        vec2<f32>(0.0, -1.0),
-    );
+    let x = f32((vid << 1u) & 2u);
+    let y = f32(vid & 2u);
     var out: VsOut;
-    out.pos = vec4<f32>(positions[vid], 0.0, 1.0);
-    out.uv = uvs[vid];
+    out.pos = vec4<f32>(x * 2.0 - 1.0, y * 2.0 - 1.0, 0.0, 1.0);
+    out.uv = vec2<f32>(x, 1.0 - y);
     return out;
 }
 

@@ -14,6 +14,8 @@ use crate::ui::theme::{
 use eframe::egui_wgpu::wgpu;
 use egui::{Align, Layout, RichText, Stroke, Ui};
 use std::collections::BTreeMap;
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 
 pub struct MapScreenResult {
     pub open_diplomacy_with: Option<String>,
@@ -23,6 +25,7 @@ pub fn render_map_screen(
     ui: &mut Ui,
     scene_3d: Option<&Latam3dScene>,
     target_format: wgpu::TextureFormat,
+    gpu_3d_failed: &Arc<AtomicBool>,
     vector_map: &LatamVectorMap,
     provinces_catalog: &BTreeMap<String, ProvinceData>,
     state: &mut GameState,
@@ -123,6 +126,7 @@ pub fn render_map_screen(
                     ui,
                     scene_3d,
                     target_format,
+                    gpu_3d_failed,
                     vector_map,
                     state,
                     *map_mode,
