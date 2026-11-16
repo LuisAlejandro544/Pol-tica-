@@ -292,3 +292,21 @@ test('Visor 3D puro compatible con Mali-G52 (Vulkan, write_buffer, Float32x2, De
   }
 });
 
+test('Shader WGSL evita palabra reservada meta y la UI táctica incluye escudos, botones físicos y margen derecho seguro', () => {
+  const renderer3d = fs.readFileSync(path.resolve('game/src/map/renderer_3d.rs'), 'utf8');
+  const theme = fs.readFileSync(path.resolve('game/src/ui/theme.rs'), 'utf8');
+  const uiMod = fs.readFileSync(path.resolve('game/src/ui/mod.rs'), 'utf8');
+  const chrome = fs.readFileSync(path.resolve('game/src/ui/components/chrome.rs'), 'utf8');
+
+  // Asegura que SHADER_3D_WGSL no declare `@location(3) meta:`
+  const shaderSection = renderer3d.slice(renderer3d.indexOf('const SHADER_3D_WGSL'));
+  assert.equal(/\bmeta\s*:/.test(shaderSection), false, 'WGSL prohíbe `meta` como nombre de atributo');
+  assert.ok(shaderSection.includes('@location(3) slot_ids: vec2<f32>'), 'Debe usar slot_ids en WGSL');
+
+  assert.ok(theme.includes('draw_country_shield'), 'Debe incluir escudo heráldico procedural');
+  assert.ok(theme.includes('game_button'), 'Debe incluir botones táctiles mecanizados');
+  assert.ok(theme.includes('SAFE_RIGHT_PAD'), 'Debe definir margen derecho seguro para barra Android');
+  assert.ok(uiMod.includes('SAFE_RIGHT_PAD'), 'ui/mod.rs debe aplicar SAFE_RIGHT_PAD');
+  assert.ok(chrome.includes('draw_country_shield'), 'Top HUD debe mostrar escudo del país');
+});
+

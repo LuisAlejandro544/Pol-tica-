@@ -1,18 +1,18 @@
 //! Propósito del archivo:
 //! Componente interactivo reutilizable del visor cartográfico 3D de Latinoamérica.
 //! Renderiza exclusivamente en 3D real (`wgpu 25` + `latinoamerica_3d.glb`) con pan táctil,
-//! zoom por pellizco/rueda, rotación/inclinación 3D, modos dinámicos de mapa y raycasting
-//! exacto por provincia y país. Sin respaldo 2D SVG.
+//! zoom por pellizco/rueda, rotación/inclinación 3D, modos dinámicos de mapa, marco táctico
+//! con controles de cámara en botones físicos y raycasting exacto por provincia y país.
 
 use crate::map::renderer_3d::{srgb_u8_to_linear, Map3dCamera, Map3dPaintCallback, MapUniforms};
 use crate::map::Latam3dScene;
 use crate::models::{GameState, MapMode};
 use crate::ui::theme::{
-    ACCENT_CRIMSON, ACCENT_CYAN, ACCENT_EMERALD, ACCENT_GOLD, BORDER_SUBTLE, TEXT_MUTED,
-    TEXT_PRIMARY,
+    draw_corner_rivets, step_button, GameIcon, ACCENT_CRIMSON, ACCENT_CYAN, ACCENT_EMERALD,
+    ACCENT_GOLD, BG_PANEL, BG_WELL, BORDER_BRASS, BORDER_SUBTLE, TEXT_MUTED, TEXT_PRIMARY,
 };
 use eframe::egui_wgpu::{self, wgpu};
-use egui::{Color32, Rect, RichText, Sense, Stroke, Ui, Vec2};
+use egui::{Color32, CornerRadius, Margin, Rect, RichText, Sense, Stroke, Ui, Vec2};
 use parking_lot::Mutex;
 use std::sync::Arc;
 
@@ -55,13 +55,13 @@ pub fn render_latam_map(
     );
     let (rect, response) = ui.allocate_exact_size(safe_size, Sense::click_and_drag());
     let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, 8.0, Color32::from_rgb(8, 22, 38));
+    painter.rect_filled(rect, CornerRadius::same(4), Color32::from_rgb(8, 20, 34));
 
     let Some(scene) = scene_3d else {
         painter.rect_stroke(
             rect,
-            8.0,
-            Stroke::new(1.5_f32, BORDER_SUBTLE),
+            CornerRadius::same(4),
+            Stroke::new(1.5_f32, BORDER_BRASS),
             egui::StrokeKind::Inside,
         );
         let msg_rect = rect.shrink(16.0);
@@ -84,7 +84,7 @@ pub fn render_latam_map(
     if let Some(err) = gpu_3d_error.lock().clone() {
         painter.rect_stroke(
             rect,
-            8.0,
+            CornerRadius::same(4),
             Stroke::new(1.5_f32, ACCENT_CRIMSON),
             egui::StrokeKind::Inside,
         );
@@ -104,7 +104,9 @@ pub fn render_latam_map(
             ui.add_space(6.0);
             ui.label(RichText::new(err).size(12.5).color(TEXT_PRIMARY));
             ui.add_space(10.0);
-            if ui.button("Reintentar Visor 3D").clicked() {
+            if step_button(ui, Vec2::new(170.0, 36.0), "Reintentar Visor 3D", Some(GameIcon::Center))
+                .clicked()
+            {
                 *gpu_3d_error.lock() = None;
             }
         });
@@ -197,64 +199,111 @@ pub fn render_latam_map(
         painter.add(callback);
     }
 
-    // Marco sutil cartográfico alrededor del visor 3D
+    // Marco cartográfico de latón y acero con remaches en las esquinas
     painter.rect_stroke(
         rect,
-        8.0,
-        Stroke::new(1.5_f32, BORDER_SUBTLE),
+        CornerRadius::same(4),
+        Stroke::new(1.5_f32, BORDER_BRASS),
         egui::StrokeKind::Inside,
     );
+    draw_corner_rivets(&painter, rect, BORDER_BRASS);
 
-    // Controles táctiles flotantes en la esquina inferior derecha del visor 3D
-    let bar_w = (rect.width() - 16.0).clamp(150.0, 278.0);
+    // Placa flotante superior izquierda: Modo de mapa y nación bajo foco
+    let mode_title = match map_mode {
+        MapMode::Political => "MAPA POLÍTICO",
+        MapMode::GdpPerCapita => "PIB PER CÁPITA",
+        MapMode::Inflation => "RIESGO INFLACIONARIO",
+        MapMode::Diplomacy => "DIPLOMACIA",
+    };
+    let badge_rect = Rect::from_min_size(rect.left_top() + Vec2::new(10.0, 10.0), Vec2::new(225.0, 26.0));
+    let mut badge_ui = ui.new_child(egui::UiBuilder::new().max_rect(badge_rect));
+    egui::Frame::new()
+        .fill(Color32::from_rgba_unmultiplied(12, 18, 26, 220))
+        .stroke(Stroke::new(1.0_f32, BORDER_BRASS))
+        .corner_radius(CornerRadius::same(3))
+        .inner_margin(Margin::symmetric(8, 3))
+        .show(&mut badge_ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(mode_title).strong().size(11.0).color(ACCENT_GOLD));
+                if let Some(sel) = &state.selected_country_id {
+                    if let Some(c) = state.countries.get(sel) {
+                        ui.label(
+                            RichText::new(format!("• {} [{}]", c.name, c.id))
+                                .size(11.0)
+                                .color(TEXT_PRIMARY),
+                        );
+                    }
+                }
+            });
+        });
+
+    // Consola táctil flotante de cámara (botón físico estilo HOI4) en la esquina inferior derecha
+    let dock_w = (rect.width() - 20.0).clamp(210.0, 290.0);
     let btn_rect = Rect::from_min_size(
-        rect.right_bottom() - Vec2::new(bar_w + 8.0, 44.0),
-        Vec2::new(bar_w, 34.0),
+        rect.right_bottom() - Vec2::new(dock_w + 10.0, 44.0),
+        Vec2::new(dock_w, 36.0),
     );
     let mut ui_child = ui.new_child(egui::UiBuilder::new().max_rect(btn_rect));
-    ui_child.horizontal_wrapped(|ui| {
-        if ui.small_button(" + ").clicked() {
-            viewport.camera_3d.zoom_by_factor(1.24);
-        }
-        if ui.small_button(" - ").clicked() {
-            viewport.camera_3d.zoom_by_factor(1.0 / 1.24);
-        }
-        if ui.small_button(" < ").clicked() {
-            viewport.camera_3d.yaw = (viewport.camera_3d.yaw - 0.18).clamp(-1.35, 1.35);
-        }
-        if ui.small_button(" > ").clicked() {
-            viewport.camera_3d.yaw = (viewport.camera_3d.yaw + 0.18).clamp(-1.35, 1.35);
-        }
-        let angle_lbl = if viewport.camera_3d.is_top_down() {
-            "3D"
-        } else {
-            "Cenital"
-        };
-        if ui.small_button(angle_lbl).clicked() {
-            if viewport.camera_3d.is_top_down() {
-                viewport.camera_3d.set_tactical_3d();
-            } else {
-                viewport.camera_3d.set_top_down();
-            }
-        }
-        if ui.small_button("Centrar").clicked() {
-            viewport.camera_3d.reset();
-        }
-    });
+    let mut cam_btn_clicked = false;
+    egui::Frame::new()
+        .fill(Color32::from_rgba_unmultiplied(16, 24, 34, 232))
+        .stroke(Stroke::new(1.5_f32, BORDER_BRASS))
+        .corner_radius(CornerRadius::same(4))
+        .inner_margin(Margin::symmetric(5, 3))
+        .show(&mut ui_child, |ui| {
+            ui.horizontal(|ui| {
+                if step_button(ui, Vec2::new(28.0, 28.0), "", Some(GameIcon::Plus)).clicked() {
+                    viewport.camera_3d.zoom_by_factor(1.24);
+                    cam_btn_clicked = true;
+                }
+                if step_button(ui, Vec2::new(28.0, 28.0), "", Some(GameIcon::Minus)).clicked() {
+                    viewport.camera_3d.zoom_by_factor(1.0 / 1.24);
+                    cam_btn_clicked = true;
+                }
+                if step_button(ui, Vec2::new(28.0, 28.0), "", Some(GameIcon::RotateLeft)).clicked() {
+                    viewport.camera_3d.yaw = (viewport.camera_3d.yaw - 0.18).clamp(-1.35, 1.35);
+                    cam_btn_clicked = true;
+                }
+                if step_button(ui, Vec2::new(28.0, 28.0), "", Some(GameIcon::RotateRight)).clicked() {
+                    viewport.camera_3d.yaw = (viewport.camera_3d.yaw + 0.18).clamp(-1.35, 1.35);
+                    cam_btn_clicked = true;
+                }
+                let angle_lbl = if viewport.camera_3d.is_top_down() {
+                    "3D"
+                } else {
+                    "2D"
+                };
+                if step_button(ui, Vec2::new(50.0, 28.0), angle_lbl, Some(GameIcon::Camera3D)).clicked() {
+                    if viewport.camera_3d.is_top_down() {
+                        viewport.camera_3d.set_tactical_3d();
+                    } else {
+                        viewport.camera_3d.set_top_down();
+                    }
+                    cam_btn_clicked = true;
+                }
+                if step_button(ui, Vec2::new(66.0, 28.0), "Centro", Some(GameIcon::Center)).clicked() {
+                    viewport.camera_3d.reset();
+                    cam_btn_clicked = true;
+                }
+            });
+        });
 
-    // Raycasting 3D exacto al tocar/clicar sobre una provincia
-    if response.clicked() {
+    // Raycasting 3D exacto al tocar/clicar sobre una provincia (ignorando toques sobre la barra de cámara)
+    if response.clicked() && !cam_btn_clicked {
         if let Some(pointer_pos) = response.interact_pointer_pos() {
-            let (ray_origin, ray_dir) = viewport.camera_3d.screen_to_ray(pointer_pos, rect);
-            if let Some((mesh_name, country_id)) = scene.pick_province_at_ray(ray_origin, ray_dir) {
-                return Some(MapPickHit {
-                    country_id: country_id.to_string(),
-                    province_mesh: Some(mesh_name.to_string()),
-                });
+            if !btn_rect.contains(pointer_pos) {
+                let (ray_origin, ray_dir) = viewport.camera_3d.screen_to_ray(pointer_pos, rect);
+                if let Some((mesh_name, country_id)) = scene.pick_province_at_ray(ray_origin, ray_dir) {
+                    return Some(MapPickHit {
+                        country_id: country_id.to_string(),
+                        province_mesh: Some(mesh_name.to_string()),
+                    });
+                }
             }
         }
     }
 
+    let _ = (BG_PANEL, BG_WELL, BORDER_SUBTLE);
     None
 }
 

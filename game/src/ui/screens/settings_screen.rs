@@ -1,10 +1,14 @@
 //! Propósito del archivo:
-//! Pantalla dedicada de Opciones y Estado del Motor (`Settings`).
-//! Permite cambiar dificultad, reiniciar campaña o volver a seleccionar otra nación.
+//! Pantalla dedicada de Opciones y Estado del Motor (`Settings`) estilo Sala de Mando.
+//! Permite cambiar dificultad mediante botones físicos, inspeccionar la GPU 3D Vulkan/GLES
+//! activa y navegar entre mapa, cambio de nación o menú principal.
 
 use crate::models::{Difficulty, GameState};
-use crate::ui::theme::{ACCENT_CYAN, ACCENT_GOLD, BG_PANEL, BORDER_SUBTLE};
-use egui::{RichText, Stroke, Ui};
+use crate::ui::theme::{
+    card_frame, draw_section_header, game_button, panel_frame, well_frame, GameIcon, ACCENT_CYAN,
+    ACCENT_EMERALD, ACCENT_GOLD, BORDER_BRASS_DIM, TEXT_MUTED, TEXT_PRIMARY,
+};
+use egui::{RichText, Ui, Vec2};
 
 pub enum SettingsAction {
     None,
@@ -25,63 +29,113 @@ pub fn render_settings_screen(
         .id_salt("settings_screen_scroll")
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            egui::Frame::new()
-                .fill(BG_PANEL)
-                .stroke(Stroke::new(1.0_f32, BORDER_SUBTLE))
-                .corner_radius(8.0)
-                .inner_margin(16.0)
-                .show(ui, |ui| {
-                    ui.label(
-                        RichText::new("OPCIONES DE CAMPAÑA Y MOTOR")
-                            .strong()
-                            .size(18.0)
-                            .color(ACCENT_GOLD),
-                    );
-                    ui.separator();
-                    ui.add_space(6.0);
+            panel_frame(true).inner_margin(14.0).show(ui, |ui| {
+                draw_section_header(
+                    ui,
+                    GameIcon::Settings,
+                    "OPCIONES DE CAMPAÑA Y MOTOR",
+                    ACCENT_GOLD,
+                );
 
-                    ui.label(RichText::new("Dificultad de la IA Local (Rust + Rayon)").strong());
+                card_frame(Some(BORDER_BRASS_DIM)).show(ui, |ui| {
+                    ui.label(
+                        RichText::new("DIFICULTAD DE LA IA LOCAL (RUST + RAYON)")
+                            .strong()
+                            .size(12.5)
+                            .color(ACCENT_CYAN),
+                    );
+                    ui.add_space(6.0);
+                    let seg_w = ((ui.available_width() - 16.0) / 3.0).clamp(95.0, 170.0);
                     ui.horizontal(|ui| {
                         for (diff, lbl) in [
                             (Difficulty::Normal, "Normal"),
                             (Difficulty::Desafiante, "Desafiante"),
                             (Difficulty::Realista, "Realista"),
                         ] {
-                            if ui.selectable_label(state.difficulty == diff, lbl).clicked() {
+                            let active = state.difficulty == diff;
+                            if game_button(
+                                ui,
+                                Vec2::new(seg_w, 36.0),
+                                lbl,
+                                None,
+                                active,
+                                Some(ACCENT_CYAN),
+                            )
+                            .clicked()
+                            {
                                 state.difficulty = diff;
                             }
                         }
                     });
-
-                    ui.add_space(12.0);
-                    ui.label(
-                        RichText::new("Arquitectura: Interfaz Rust (egui/eframe + wgpu 3D) + Lua 5.4 + NativeActivity Android")
-                            .color(ACCENT_CYAN),
-                    );
-                    ui.label(format!("GPU 3D activa: {gpu_info} • Superficie: {target_format:?}"));
-                    ui.label("Soporte nativo ABI: 64-bit (arm64-v8a / x86_64) y 32-bit (armeabi-v7a).");
-                    ui.add_space(14.0);
-
-                    ui.horizontal_wrapped(|ui| {
-                        if state.player_country_id.is_some()
-                            && ui.add_sized([185.0, 40.0], egui::Button::new("Volver al Mapa")).clicked()
-                        {
-                            action = SettingsAction::ReturnToMap;
-                        }
-                        if ui
-                            .add_sized([205.0, 40.0], egui::Button::new("Elegir Otra Nación"))
-                            .clicked()
-                        {
-                            action = SettingsAction::RestartSelectCountry;
-                        }
-                        if ui
-                            .add_sized([195.0, 40.0], egui::Button::new("Ir al Menú Principal"))
-                            .clicked()
-                        {
-                            action = SettingsAction::ReturnToMainMenu;
-                        }
-                    });
                 });
+
+                ui.add_space(8.0);
+
+                well_frame().show(ui, |ui| {
+                    ui.label(
+                        RichText::new(
+                            "Motor: Interfaz Rust (egui/eframe + wgpu 3D) + Lua 5.4 + NativeActivity",
+                        )
+                        .strong()
+                        .size(12.5)
+                        .color(ACCENT_CYAN),
+                    );
+                    ui.label(
+                        RichText::new(format!("GPU 3D activa: {gpu_info} • Superficie: {target_format:?}"))
+                            .size(12.0)
+                            .color(TEXT_PRIMARY),
+                    );
+                    ui.label(
+                        RichText::new(
+                            "Soporte nativo ABI: 64-bit (arm64-v8a / x86_64) y 32-bit (armeabi-v7a).",
+                        )
+                        .size(11.5)
+                        .color(TEXT_MUTED),
+                    );
+                });
+
+                ui.add_space(12.0);
+
+                ui.horizontal_wrapped(|ui| {
+                    if state.player_country_id.is_some()
+                        && game_button(
+                            ui,
+                            Vec2::new(178.0, 42.0),
+                            "Volver al Mapa",
+                            Some(GameIcon::Map),
+                            true,
+                            Some(ACCENT_EMERALD),
+                        )
+                        .clicked()
+                    {
+                        action = SettingsAction::ReturnToMap;
+                    }
+                    if game_button(
+                        ui,
+                        Vec2::new(196.0, 42.0),
+                        "Elegir Otra Nación",
+                        Some(GameIcon::Crown),
+                        false,
+                        Some(ACCENT_GOLD),
+                    )
+                    .clicked()
+                    {
+                        action = SettingsAction::RestartSelectCountry;
+                    }
+                    if game_button(
+                        ui,
+                        Vec2::new(186.0, 42.0),
+                        "Menú Principal",
+                        Some(GameIcon::Settings),
+                        false,
+                        None,
+                    )
+                    .clicked()
+                    {
+                        action = SettingsAction::ReturnToMainMenu;
+                    }
+                });
+            });
         });
 
     action

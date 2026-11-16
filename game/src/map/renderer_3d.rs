@@ -802,7 +802,7 @@ struct VsIn {
     @location(0) pos: vec3<f32>,
     @location(1) normal: vec3<f32>,
     @location(2) color: vec4<f32>,
-    @location(3) meta: vec2<f32>,
+    @location(3) slot_ids: vec2<f32>,
 };
 
 struct VsOut {
@@ -810,7 +810,7 @@ struct VsOut {
     @location(0) world_pos: vec3<f32>,
     @location(1) world_normal: vec3<f32>,
     @location(2) color: vec4<f32>,
-    @location(3) meta: vec2<f32>,
+    @location(3) slot_ids: vec2<f32>,
 };
 
 @vertex
@@ -820,15 +820,15 @@ fn vs_main(v: VsIn) -> VsOut {
     out.world_pos = v.pos;
     out.world_normal = v.normal;
     out.color = v.color;
-    out.meta = v.meta;
+    out.slot_ids = v.slot_ids;
     return out;
 }
 
 @fragment
-fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
-    var base = in.color.rgb;
-    let c_slot = i32(round(in.meta.x));
-    let p_slot = i32(round(in.meta.y));
+fn fs_main(frag: VsOut) -> @location(0) vec4<f32> {
+    var base = frag.color.rgb;
+    let c_slot = i32(round(frag.slot_ids.x));
+    let p_slot = i32(round(frag.slot_ids.y));
 
     if (c_slot >= 0 && c_slot < 32) {
         // Modo distinto a Político (1=PIB, 2=Inflación, 3=Diplomacia)
@@ -848,8 +848,8 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         }
     }
 
-    let n_len = length(in.world_normal);
-    let n = select(vec3<f32>(0.0, 1.0, 0.0), in.world_normal / n_len, n_len > 0.00001);
+    let n_len = length(frag.world_normal);
+    let n = select(vec3<f32>(0.0, 1.0, 0.0), frag.world_normal / n_len, n_len > 0.00001);
     let sun_dir = normalize(vec3<f32>(0.42, 0.84, 0.34));
     let rim_dir = normalize(vec3<f32>(-0.45, 0.55, -0.50));
 

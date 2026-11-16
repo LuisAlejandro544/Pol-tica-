@@ -200,34 +200,59 @@ impl eframe::App for HorizonteLatamApp {
 
         // Barra superior persistente durante la campaña
         if in_campaign {
-            egui::TopBottomPanel::top("top_hud_panel").show(ctx, |ui| {
-                match render_top_hud(ui, &self.state, self.worker.is_busy) {
-                    TopBarAction::None => {}
-                    TopBarAction::TogglePause => {
-                        self.state.paused = !self.state.paused;
-                        self.last_tick_instant = Instant::now();
+            let hud_frame = egui::Frame::new()
+                .fill(crate::ui::theme::BG_DEEP)
+                .inner_margin(egui::Margin {
+                    left: 8,
+                    right: crate::ui::theme::SAFE_RIGHT_PAD,
+                    top: 4,
+                    bottom: 2,
+                });
+            egui::TopBottomPanel::top("top_hud_panel")
+                .frame(hud_frame)
+                .show(ctx, |ui| {
+                    match render_top_hud(ui, &self.state, self.worker.is_busy) {
+                        TopBarAction::None => {}
+                        TopBarAction::TogglePause => {
+                            self.state.paused = !self.state.paused;
+                            self.last_tick_instant = Instant::now();
+                        }
+                        TopBarAction::AdvanceOneTurn => {
+                            self.worker.request_advance_turn(&self.state);
+                        }
+                        TopBarAction::SetSpeed(spd) => {
+                            self.state.speed_level = spd;
+                        }
                     }
-                    TopBarAction::AdvanceOneTurn => {
-                        self.worker.request_advance_turn(&self.state);
-                    }
-                    TopBarAction::SetSpeed(spd) => {
-                        self.state.speed_level = spd;
-                    }
-                }
-            });
+                });
 
             // Barra inferior de navegación entre pantallas independientes
-            egui::TopBottomPanel::bottom("bottom_nav_panel").show(ctx, |ui| {
-                if let Some(next_route) = render_bottom_nav(ui, self.route) {
-                    self.route = next_route;
-                }
-            });
+            let nav_frame = egui::Frame::new()
+                .fill(crate::ui::theme::BG_DEEP)
+                .inner_margin(egui::Margin {
+                    left: 8,
+                    right: crate::ui::theme::SAFE_RIGHT_PAD,
+                    top: 2,
+                    bottom: 4,
+                });
+            egui::TopBottomPanel::bottom("bottom_nav_panel")
+                .frame(nav_frame)
+                .show(ctx, |ui| {
+                    if let Some(next_route) = render_bottom_nav(ui, self.route) {
+                        self.route = next_route;
+                    }
+                });
         }
 
         // Contenido principal según la pantalla activa (con margen seguro táctil en bordes)
         let central_frame = egui::Frame::central_panel(&ctx.style())
             .fill(crate::ui::theme::BG_DEEP)
-            .inner_margin(egui::Margin::symmetric(14, 8));
+            .inner_margin(egui::Margin {
+                left: 10,
+                right: crate::ui::theme::SAFE_RIGHT_PAD,
+                top: 6,
+                bottom: 6,
+            });
         egui::CentralPanel::default().frame(central_frame).show(ctx, |ui| {
             if let Some(err) = &self.last_error {
                 ui.colored_label(egui::Color32::RED, format!("Aviso del motor: {err}"));
