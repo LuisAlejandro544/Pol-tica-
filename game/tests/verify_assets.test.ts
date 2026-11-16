@@ -55,6 +55,7 @@ test('Cargo.toml usa Rust 2024, Lua 5.4 vendored, wgpu 3D y solo licencias permi
   assert.ok(cargo.includes('bytemuck ='));
   assert.ok(cargo.includes('gltf = "1.4"'));
   assert.ok(cargo.includes('android-activity'));
+  assert.equal(/wgpu\s*=\s*\{[^}]*features\s*=\s*\[[^\]]*("gles"|"vulkan")/.test(cargo), false, 'wgpu 24 no usa features gles/vulkan en Cargo.toml');
   assert.equal(/resvg|usvg|gpl|agpl/i.test(cargo), false, 'No debe incluir crates copyleft');
 });
 

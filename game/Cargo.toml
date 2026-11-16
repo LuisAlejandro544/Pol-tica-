@@ -63,7 +63,8 @@ log = "0.4"
 android_logger = "0.14"
 eframe = { version = "0.31", default-features = false, features = ["wgpu", "android-native-activity", "default_fonts"] }
 egui-winit = { version = "0.31", features = ["android-native-activity"] }
-wgpu = { version = "24", features = ["vulkan", "gles"] }
+# Nota: en wgpu 24 los backends Vulkan y GLES en Android se activan automáticamente
+# mediante `wgpu = "24"` sin features explícitas (`vulkan`/`gles` se añadieron en wgpu 25).
 
 [target.'cfg(target_os = "linux")'.dependencies]
 eframe = { version = "0.31", default-features = false, features = ["wgpu", "x11", "wayland", "default_fonts"] }
