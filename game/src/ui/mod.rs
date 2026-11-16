@@ -17,7 +17,8 @@ use crate::models::{
     ScreenRoute,
 };
 use crate::ui::components::chrome::{
-    render_bottom_nav, render_event_popup, render_top_hud, TopBarAction,
+    render_bottom_nav, render_event_popup, render_floating_bottom_nav, render_floating_top_hud,
+    render_top_hud, TopBarAction,
 };
 use crate::ui::components::map_canvas::MapViewportState;
 use crate::ui::screens::companies_screen::{render_companies_screen, CompaniesViewState};
@@ -259,9 +260,10 @@ impl eframe::App for HorizonteLatamApp {
 
         let in_campaign = !matches!(self.route, ScreenRoute::MainMenu | ScreenRoute::CountrySelect)
             && self.state.player_country_id.is_some();
+        let fullscreen_map = in_campaign && self.route == ScreenRoute::WorldMap;
 
-        // Barra superior persistente durante la campaña (altura fija para nunca invadir el mapa)
-        if in_campaign {
+        // En pantallas administrativas usamos paneles fijos; en Mapa usamos pantalla completa borde a borde
+        if in_campaign && !fullscreen_map {
             let hud_frame = egui::Frame::new()
                 .fill(crate::ui::theme::BG_DEEP)
                 .inner_margin(egui::Margin {
@@ -287,7 +289,6 @@ impl eframe::App for HorizonteLatamApp {
                     }
                 });
 
-            // Barra inferior de navegación entre pantallas independientes
             let nav_frame = egui::Frame::new()
                 .fill(crate::ui::theme::BG_DEEP)
                 .inner_margin(egui::Margin {
@@ -307,18 +308,27 @@ impl eframe::App for HorizonteLatamApp {
                 });
         }
 
-        // Contenido principal según la pantalla activa (con margen seguro táctil en bordes)
-        let central_frame = egui::Frame::central_panel(&ctx.style())
-            .fill(crate::ui::theme::BG_DEEP)
-            .inner_margin(egui::Margin {
-                left: 10,
-                right: crate::ui::theme::SAFE_RIGHT_PAD,
-                top: 6,
-                bottom: 6,
-            });
+        // Contenido principal según la pantalla activa (margen cero en Mapa para 100% pantalla completa)
+        let central_frame = if fullscreen_map {
+            egui::Frame::central_panel(&ctx.style())
+                .fill(crate::ui::theme::BG_DEEP)
+                .inner_margin(egui::Margin::ZERO)
+        } else {
+            egui::Frame::central_panel(&ctx.style())
+                .fill(crate::ui::theme::BG_DEEP)
+                .inner_margin(egui::Margin {
+                    left: 10,
+                    right: crate::ui::theme::SAFE_RIGHT_PAD,
+                    top: 6,
+                    bottom: 6,
+                })
+        };
+        let mut next_hud_rects = Vec::new();
         egui::CentralPanel::default().frame(central_frame).show(ctx, |ui| {
-            if let Some(err) = &self.last_error {
-                ui.colored_label(egui::Color32::RED, format!("Aviso del motor: {err}"));
+            if !fullscreen_map {
+                if let Some(err) = &self.last_error {
+                    ui.colored_label(egui::Color32::RED, format!("Aviso del motor: {err}"));
+                }
             }
 
             match self.route {
@@ -394,6 +404,7 @@ impl eframe::App for HorizonteLatamApp {
                         &mut self.map_viewport,
                         &mut self.show_country_popup,
                     );
+                    next_hud_rects.extend(res.overlay_rects);
                     if let Some((unit_id, target_province)) = res.order_unit_move {
                         self.dispatch_player_action(PlayerAction::OrderUnitMove {
                             unit_id,
@@ -449,6 +460,61 @@ impl eframe::App for HorizonteLatamApp {
                 }
             }
         });
+
+        // En modo mapa pantalla completa, flotamos el HUD superior y dock inferior encima del 3D
+        if fullscreen_map {
+            let (top_act, top_rect) = render_floating_top_hud(ctx, &self.state, self.worker.is_busy);
+            next_hud_rects.push(top_rect);
+            match top_act {
+                TopBarAction::None => {}
+                TopBarAction::TogglePause => {
+                    self.state.paused = !self.state.paused;
+                    self.last_tick_instant = Instant::now();
+                }
+                TopBarAction::SetSpeed(spd) => {
+                    self.state.speed_level = spd;
+                }
+            }
+
+            let (next_route, nav_rect) = render_floating_bottom_nav(ctx, self.route);
+            next_hud_rects.push(nav_rect);
+            if let Some(route) = next_route {
+                self.route = route;
+            }
+
+            if let Some(err) = self.last_error.clone() {
+                let err_resp = egui::Area::new(egui::Id::new("fullscreen_map_error_toast"))
+                    .anchor(egui::Align2::CENTER_TOP, [-16.0, 102.0])
+                    .order(egui::Order::Foreground)
+                    .show(ctx, |ui| {
+                        crate::ui::theme::floating_hud_frame(false)
+                            .stroke(egui::Stroke::new(1.5_f32, crate::ui::theme::ACCENT_CRIMSON))
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label(
+                                        egui::RichText::new(format!("Aviso del motor: {err}"))
+                                            .size(11.5)
+                                            .color(crate::ui::theme::ACCENT_CRIMSON),
+                                    );
+                                    if crate::ui::theme::game_button(
+                                        ui,
+                                        egui::Vec2::new(24.0, 20.0),
+                                        "X",
+                                        None,
+                                        false,
+                                        Some(crate::ui::theme::ACCENT_CRIMSON),
+                                    )
+                                    .clicked()
+                                    {
+                                        self.last_error = None;
+                                    }
+                                });
+                            });
+                    });
+                next_hud_rects.push(err_resp.response.rect);
+            }
+        }
+        self.map_viewport.hud_rects = next_hud_rects;
 
         // Popup modal de evento geopolítico generado por Lua 5.4
         if let Some(ev) = self.state.active_event.clone() {

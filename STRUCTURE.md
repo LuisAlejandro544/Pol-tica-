@@ -55,14 +55,14 @@ Descripción exacta de carpetas y responsabilidades de cada módulo en el reposi
 │       ├── engine/mod.rs             # Simulación continua en tiempo real (días, marcha de tropas, bolsa y empresas)
 │       └── ui/
 │           ├── mod.rs                # Router multipantalla (HorizonteLatamApp) y acumulador de tiempo real
-│           ├── theme.rs              # Paleta táctica, espaciado táctil, íconos vectoriales y formateadores
+│           ├── theme.rs              # Paleta táctica, marcos flotantes con sombra, íconos vectoriales y biseles
 │           ├── components/
-│           │   ├── chrome.rs         # HUD superior en tiempo real, navegación inferior y popup de eventos
-│           │   └── map_canvas.rs     # Lienzo 3D interactivo con proyección de unidades y rutas de marcha
+│           │   ├── chrome.rs         # HUD superior y dock inferior (fijo en gestión, flotante sobre el mapa)
+│           │   └── map_canvas.rs     # Lienzo 3D interactivo borde a borde con fichas militares separadas
 │           └── screens/
 │               ├── main_menu.rs
 │               ├── country_select.rs
-│               ├── map_screen.rs
+│               ├── map_screen.rs     # Visor 3D 100% pantalla completa + overlays tácticos y crónica plegable
 │               ├── economy_screen.rs
 │               ├── companies_screen.rs # Bolsa regional, empresas fundadas, productos, empleos y gráficas
 │               ├── politics_screen.rs

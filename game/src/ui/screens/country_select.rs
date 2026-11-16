@@ -7,7 +7,7 @@
 
 use crate::map::Latam3dScene;
 use crate::models::{GameState, MapMode};
-use crate::ui::components::map_canvas::{render_latam_map, MapViewportState};
+use crate::ui::components::map_canvas::{render_latam_map, MapCanvasConfig, MapViewportState};
 use crate::ui::theme::{
     card_frame, draw_country_shield, draw_section_header, format_population, format_usd_millions,
     game_button, ideology_color, panel_frame, well_frame, GameIcon, ACCENT_CYAN, ACCENT_EMERALD,
@@ -169,6 +169,7 @@ pub fn render_country_select(
                     state,
                     MapMode::Political,
                     viewport,
+                    MapCanvasConfig::default(),
                 ) {
                     state.selected_country_id = Some(hit.country_id);
                     state.selected_province_mesh = hit.province_mesh;

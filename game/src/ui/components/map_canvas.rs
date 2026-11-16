@@ -8,9 +8,9 @@ use crate::map::renderer_3d::{srgb_u8_to_linear, Map3dCamera, Map3dPaintCallback
 use crate::map::Latam3dScene;
 use crate::models::{GameState, MapMode};
 use crate::ui::theme::{
-    draw_corner_rivets, step_button, GameIcon, ACCENT_CRIMSON, ACCENT_CYAN, ACCENT_EMERALD,
-    ACCENT_GOLD, BG_PANEL, BG_WELL, BORDER_BRASS, BORDER_SUBTLE, TEXT_DARK, TEXT_MUTED,
-    TEXT_PRIMARY,
+    draw_corner_rivets, floating_hud_frame, step_button, GameIcon, ACCENT_CRIMSON, ACCENT_CYAN,
+    ACCENT_EMERALD, ACCENT_GOLD, BG_PANEL, BG_WELL, BORDER_BRASS, BORDER_SUBTLE, TEXT_DARK,
+    TEXT_MUTED, TEXT_PRIMARY,
 };
 use eframe::egui_wgpu::{self, wgpu};
 use egui::{Color32, CornerRadius, FontId, Margin, Pos2, Rect, RichText, Sense, Stroke, Ui, Vec2};
@@ -24,10 +24,31 @@ pub struct MapPickHit {
     pub unit_id: Option<u64>,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct MapCanvasConfig {
+    pub fullscreen_borderless: bool,
+    pub show_mode_badge: bool,
+    pub camera_bottom_offset: f32,
+    pub camera_right_inset: f32,
+}
+
+impl Default for MapCanvasConfig {
+    fn default() -> Self {
+        Self {
+            fullscreen_borderless: false,
+            show_mode_badge: true,
+            camera_bottom_offset: 8.0,
+            camera_right_inset: 10.0,
+        }
+    }
+}
+
 pub struct MapViewportState {
     pub zoom: f32,
     pub pan: Vec2,
     pub camera_3d: Map3dCamera,
+    pub show_chronicle_drawer: bool,
+    pub hud_rects: Vec<Rect>,
 }
 
 impl Default for MapViewportState {
@@ -36,11 +57,14 @@ impl Default for MapViewportState {
             zoom: 1.0,
             pan: Vec2::ZERO,
             camera_3d: Map3dCamera::default(),
+            show_chronicle_drawer: false,
+            hud_rects: Vec::new(),
         }
     }
 }
 
-/// Dibuja el visor 3D (`wgpu`) y devuelve el país y provincia tocados si hubo tap/clic.
+/// Dibuja el visor 3D (`wgpu`) y devuelve el país, provincia o unidad tocados si hubo tap/clic.
+#[allow(clippy::too_many_arguments)]
 pub fn render_latam_map(
     ui: &mut Ui,
     scene_3d: Option<&Latam3dScene>,
@@ -50,6 +74,7 @@ pub fn render_latam_map(
     state: &GameState,
     map_mode: MapMode,
     viewport: &mut MapViewportState,
+    config: MapCanvasConfig,
 ) -> Option<MapPickHit> {
     let available = ui.available_size();
     let safe_size = Vec2::new(
@@ -116,8 +141,13 @@ pub fn render_latam_map(
         return None;
     }
 
-    // Gestos táctiles y de ratón sobre el visor 3D
-    if response.hovered() {
+    let pointer_latest = ui.ctx().input(|i| i.pointer.latest_pos());
+    let pointer_on_hud = pointer_latest
+        .map(|p| viewport.hud_rects.iter().any(|r| r.contains(p)))
+        .unwrap_or(false);
+
+    // Gestos táctiles y de ratón sobre el visor 3D (ignorados si el dedo está sobre un HUD flotante)
+    if response.hovered() && !pointer_on_hud {
         if let Some(mt) = ui.input(|i| i.multi_touch()) {
             if (mt.zoom_delta - 1.0).abs() > 0.002 {
                 viewport.camera_3d.zoom_by_factor(mt.zoom_delta);
@@ -202,21 +232,24 @@ pub fn render_latam_map(
         painter.add(callback);
     }
 
-    // Marco cartográfico de latón y acero con remaches en las esquinas
-    painter.rect_stroke(
-        rect,
-        CornerRadius::same(4),
-        Stroke::new(1.5_f32, BORDER_BRASS),
-        egui::StrokeKind::Inside,
-    );
-    draw_corner_rivets(&painter, rect, BORDER_BRASS);
+    if !config.fullscreen_borderless {
+        // Marco cartográfico de latón y acero con remaches en las esquinas para vistas en ventana
+        painter.rect_stroke(
+            rect,
+            CornerRadius::same(4),
+            Stroke::new(1.5_f32, BORDER_BRASS),
+            egui::StrokeKind::Inside,
+        );
+        draw_corner_rivets(&painter, rect, BORDER_BRASS);
+    }
 
-    // Proyección 3D -> 2D de unidades militares desplegadas y rutas de marcha (solo en campaña activa)
+    // Proyección 3D -> 2D de unidades militares desplegadas con dispersión anti-solapamiento
     let mut unit_hitboxes: Vec<(Rect, u64, String)> = Vec::new();
+    let mut placed_badges: Vec<Rect> = Vec::new();
     if state.player_country_id.is_some() {
         let map_painter = painter.with_clip_rect(rect.shrink(2.0));
         for unit in &state.units {
-            let Some(screen_pos) = project_world_to_rect(unit.world_pos, view_proj, rect) else {
+            let Some(anchor_pos) = project_world_to_rect(unit.world_pos, view_proj, rect) else {
                 continue;
             };
             let is_player_unit =
@@ -240,12 +273,47 @@ pub fn render_latam_map(
                             ACCENT_CRIMSON
                         };
                         map_painter.line_segment(
-                            [screen_pos, dest_screen],
-                            Stroke::new(2.0_f32, line_col),
+                            [anchor_pos, dest_screen],
+                            Stroke::new(2.2_f32, line_col),
                         );
-                        map_painter.circle_filled(dest_screen, 3.5, line_col);
+                        map_painter.circle_filled(dest_screen, 4.0, line_col);
                     }
                 }
+            }
+
+            let badge_size = if is_selected {
+                Vec2::new(50.0, 20.0)
+            } else {
+                Vec2::new(42.0, 17.5)
+            };
+
+            let offsets = [
+                Vec2::ZERO,
+                Vec2::new(0.0, -20.0),
+                Vec2::new(0.0, 20.0),
+                Vec2::new(45.0, 0.0),
+                Vec2::new(-45.0, 0.0),
+                Vec2::new(45.0, -20.0),
+                Vec2::new(-45.0, 20.0),
+                Vec2::new(0.0, -40.0),
+                Vec2::new(0.0, 40.0),
+            ];
+            let mut badge_rect = Rect::from_center_size(anchor_pos, badge_size);
+            for off in offsets {
+                let candidate = Rect::from_center_size(anchor_pos + off, badge_size);
+                if !placed_badges.iter().any(|r| r.intersects(candidate)) {
+                    badge_rect = candidate;
+                    break;
+                }
+            }
+            placed_badges.push(badge_rect);
+
+            if (badge_rect.center() - anchor_pos).length_sq() > 9.0 {
+                map_painter.line_segment(
+                    [anchor_pos, badge_rect.center()],
+                    Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(194, 152, 74, 150)),
+                );
+                map_painter.circle_filled(anchor_pos, 2.2, ACCENT_GOLD);
             }
 
             let c_rgb = state
@@ -254,25 +322,25 @@ pub fn render_latam_map(
                 .map(|c| Color32::from_rgb(c.color[0], c.color[1], c.color[2]))
                 .unwrap_or(Color32::GRAY);
 
-            let badge_size = if is_selected {
-                Vec2::new(50.0, 20.0)
-            } else {
-                Vec2::new(44.0, 18.0)
-            };
-            let badge_rect = Rect::from_center_size(screen_pos, badge_size);
             let border_col = if is_selected {
                 ACCENT_GOLD
             } else if is_player_unit {
                 ACCENT_CYAN
             } else {
-                Color32::from_rgb(20, 24, 30)
+                Color32::from_rgb(70, 88, 112)
             };
             let fill_col = if is_selected {
                 ACCENT_GOLD
             } else {
-                Color32::from_rgba_unmultiplied(16, 22, 32, 232)
+                Color32::from_rgba_unmultiplied(12, 18, 28, 232)
             };
 
+            // Sombra sutil debajo de la ficha táctica
+            map_painter.rect_filled(
+                badge_rect.translate(Vec2::new(1.5, 2.0)),
+                CornerRadius::same(3),
+                Color32::from_rgba_unmultiplied(0, 0, 0, 125),
+            );
             map_painter.rect_filled(badge_rect, CornerRadius::same(3), fill_col);
             map_painter.rect_stroke(
                 badge_rect,
@@ -284,7 +352,7 @@ pub fn render_latam_map(
             // Franja lateral de color nacional
             let stripe = Rect::from_min_size(
                 badge_rect.min + Vec2::new(1.5, 1.5),
-                Vec2::new(5.0, badge_rect.height() - 3.0),
+                Vec2::new(4.5, badge_rect.height() - 3.0),
             );
             map_painter.rect_filled(stripe, CornerRadius::same(1), c_rgb);
 
@@ -306,50 +374,53 @@ pub fn render_latam_map(
         }
     }
 
-    // Placa flotante superior izquierda: Modo de mapa y nación bajo foco
-    let mode_title = match map_mode {
-        MapMode::Political => "MAPA POLÍTICO",
-        MapMode::GdpPerCapita => "PIB PER CÁPITA",
-        MapMode::Inflation => "RIESGO INFLACIONARIO",
-        MapMode::Diplomacy => "DIPLOMACIA",
-    };
-    let badge_w = (rect.width() - 24.0).clamp(180.0, 310.0);
-    let badge_rect = Rect::from_min_size(rect.left_top() + Vec2::new(10.0, 10.0), Vec2::new(badge_w, 26.0));
-    let mut badge_ui = ui.new_child(egui::UiBuilder::new().max_rect(badge_rect));
-    badge_ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-    egui::Frame::new()
-        .fill(Color32::from_rgba_unmultiplied(12, 18, 26, 220))
-        .stroke(Stroke::new(1.0_f32, BORDER_BRASS))
-        .corner_radius(CornerRadius::same(3))
-        .inner_margin(Margin::symmetric(8, 3))
-        .show(&mut badge_ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(RichText::new(mode_title).strong().size(11.0).color(ACCENT_GOLD));
-                if let Some(sel) = &state.selected_country_id {
-                    if let Some(c) = state.countries.get(sel) {
-                        ui.label(
-                            RichText::new(format!("• {} [{}]", c.name, c.id))
-                                .size(11.0)
-                                .color(TEXT_PRIMARY),
-                        );
+    if config.show_mode_badge {
+        let mode_title = match map_mode {
+            MapMode::Political => "MAPA POLÍTICO",
+            MapMode::GdpPerCapita => "PIB PER CÁPITA",
+            MapMode::Inflation => "RIESGO INFLACIONARIO",
+            MapMode::Diplomacy => "DIPLOMACIA",
+        };
+        let badge_w = (rect.width() - 24.0).clamp(180.0, 310.0);
+        let badge_rect =
+            Rect::from_min_size(rect.left_top() + Vec2::new(10.0, 10.0), Vec2::new(badge_w, 26.0));
+        let mut badge_ui = ui.new_child(egui::UiBuilder::new().max_rect(badge_rect));
+        badge_ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+        egui::Frame::new()
+            .fill(Color32::from_rgba_unmultiplied(12, 18, 26, 220))
+            .stroke(Stroke::new(1.0_f32, BORDER_BRASS))
+            .corner_radius(CornerRadius::same(3))
+            .inner_margin(Margin::symmetric(8, 3))
+            .show(&mut badge_ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(mode_title).strong().size(11.0).color(ACCENT_GOLD));
+                    if let Some(sel) = &state.selected_country_id {
+                        if let Some(c) = state.countries.get(sel) {
+                            ui.label(
+                                RichText::new(format!("• {} [{}]", c.name, c.id))
+                                    .size(11.0)
+                                    .color(TEXT_PRIMARY),
+                            );
+                        }
                     }
-                }
+                });
             });
-        });
+    }
 
     // Consola táctil flotante de cámara (botón físico estilo HOI4) en la esquina inferior derecha
     let dock_w = (rect.width() - 20.0).clamp(220.0, 294.0);
     let btn_rect = Rect::from_min_size(
-        rect.right_bottom() - Vec2::new(dock_w + 10.0, 44.0),
+        rect.right_bottom()
+            - Vec2::new(
+                dock_w + config.camera_right_inset,
+                36.0 + config.camera_bottom_offset,
+            ),
         Vec2::new(dock_w, 36.0),
     );
     let mut ui_child = ui.new_child(egui::UiBuilder::new().max_rect(btn_rect));
     let mut cam_btn_clicked = false;
-    egui::Frame::new()
-        .fill(Color32::from_rgba_unmultiplied(16, 24, 34, 232))
-        .stroke(Stroke::new(1.5_f32, BORDER_BRASS))
-        .corner_radius(CornerRadius::same(4))
-        .inner_margin(Margin::symmetric(5, 3))
+    let cam_frame = floating_hud_frame(true)
+        .inner_margin(Margin::symmetric(6, 3))
         .show(&mut ui_child, |ui| {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 5.0;
@@ -388,11 +459,13 @@ pub fn render_latam_map(
                 }
             });
         });
+    draw_corner_rivets(ui.painter(), cam_frame.response.rect, BORDER_BRASS);
 
     // Raycasting 3D exacto o selección de unidad militar al tocar/clicar en el mapa
     if response.clicked() && !cam_btn_clicked {
         if let Some(pointer_pos) = response.interact_pointer_pos() {
-            if !btn_rect.contains(pointer_pos) {
+            let blocked_by_hud = viewport.hud_rects.iter().any(|r| r.contains(pointer_pos));
+            if !btn_rect.contains(pointer_pos) && !blocked_by_hud {
                 for (ubox, uid, ucid) in unit_hitboxes.iter().rev() {
                     if ubox.contains(pointer_pos) {
                         return Some(MapPickHit {

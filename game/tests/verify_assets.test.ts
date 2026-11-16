@@ -369,4 +369,21 @@ test('Simulación en tiempo real, reclutamiento/movimiento de tropas por estados
   assert.equal(engineRs.includes('state.get_relation(&unit.country_id'), false, 'step_unit_movements no debe prestar state entero mientras itera &mut state.units');
 });
 
+test('Mapa 3D a pantalla completa con HUD flotante translúcido y fichas militares sin solapamiento', () => {
+  const themeRs = fs.readFileSync(path.resolve('game/src/ui/theme.rs'), 'utf8');
+  const chromeRs = fs.readFileSync(path.resolve('game/src/ui/components/chrome.rs'), 'utf8');
+  const mapCanvasRs = fs.readFileSync(path.resolve('game/src/ui/components/map_canvas.rs'), 'utf8');
+  const mapScreenRs = fs.readFileSync(path.resolve('game/src/ui/screens/map_screen.rs'), 'utf8');
+  const uiModRs = fs.readFileSync(path.resolve('game/src/ui/mod.rs'), 'utf8');
 
+  assert.ok(themeRs.includes('floating_hud_frame'), 'theme.rs debe definir floating_hud_frame');
+  assert.ok(themeRs.includes('floating_dock_frame'), 'theme.rs debe definir floating_dock_frame');
+  assert.ok(chromeRs.includes('render_floating_top_hud'), 'chrome.rs debe exponer HUD superior flotante');
+  assert.ok(chromeRs.includes('render_floating_bottom_nav'), 'chrome.rs debe exponer dock inferior flotante');
+  assert.ok(uiModRs.includes('Margin::ZERO'), 'ui/mod.rs debe usar Margin::ZERO en WorldMap para mapa 3D borde a borde');
+  assert.ok(uiModRs.includes('hud_rects'), 'ui/mod.rs debe registrar los rectángulos del HUD flotante');
+  assert.ok(mapScreenRs.includes('fullscreen_borderless: true'), 'map_screen.rs debe renderizar el mapa 3D sin bordes');
+  assert.ok(mapScreenRs.includes('show_chronicle_drawer'), 'map_screen.rs debe permitir plegar/desplegar la crónica');
+  assert.ok(mapCanvasRs.includes('placed_badges'), 'map_canvas.rs debe evitar el solapamiento entre fichas de ejército');
+  assert.ok(mapCanvasRs.includes('pointer_on_hud'), 'map_canvas.rs debe ignorar toques que caigan sobre HUD flotante');
+});

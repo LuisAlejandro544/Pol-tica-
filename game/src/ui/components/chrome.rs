@@ -5,12 +5,13 @@
 
 use crate::models::{GameEvent, GameState, ScreenRoute};
 use crate::ui::theme::{
-    draw_country_shield, draw_gauge_bar, format_population, format_usd_millions, game_button,
-    paint_icon, panel_frame, well_frame, GameIcon, ACCENT_CRIMSON, ACCENT_CYAN, ACCENT_EMERALD,
-    ACCENT_GOLD, BG_CARD, BG_PANEL, BG_WELL, BORDER_BRASS, BORDER_BRASS_DIM, BORDER_SUBTLE,
+    draw_corner_rivets, draw_country_shield, draw_gauge_bar, floating_dock_frame,
+    floating_hud_frame, format_population, format_usd_millions, game_button, paint_icon,
+    panel_frame, well_frame, GameIcon, ACCENT_CRIMSON, ACCENT_CYAN, ACCENT_EMERALD, ACCENT_GOLD,
+    BG_CARD, BG_PANEL, BG_WELL, BORDER_BRASS, BORDER_BRASS_DIM, BORDER_SUBTLE, SAFE_RIGHT_PAD,
     TEXT_DARK, TEXT_MUTED, TEXT_PRIMARY,
 };
-use egui::{Color32, CornerRadius, Margin, RichText, Sense, Stroke, Ui, Vec2};
+use egui::{Color32, CornerRadius, Margin, Rect, RichText, Sense, Stroke, Ui, Vec2};
 
 pub enum TopBarAction {
     None,
@@ -18,211 +19,247 @@ pub enum TopBarAction {
     SetSpeed(u8),
 }
 
-/// Barra superior persistente durante la campaña: escudo + indicadores a la izquierda y reloj en tiempo real a la derecha.
+/// Barra superior persistente para pantallas administrativas (Economía, Empresas, Política, etc.).
 pub fn render_top_hud(ui: &mut Ui, state: &GameState, _sim_busy: bool) -> TopBarAction {
     let mut action = TopBarAction::None;
 
     panel_frame(true)
         .inner_margin(Margin::symmetric(8, 4))
         .show(ui, |ui| {
-            ui.set_height(38.0);
-            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-            ui.spacing_mut().scroll.bar_width = 3.0;
-
-            let total_w = ui.available_width().max(320.0);
-            let controls_w = 248.0_f32.min((total_w - 140.0).max(210.0));
-            let stats_w = (total_w - controls_w - 10.0).max(120.0);
-
-            ui.horizontal_centered(|ui| {
-                // Bloque izquierdo desplazable: Escudo nacional + cajas de métricas tácticas
-                ui.allocate_ui_with_layout(
-                    Vec2::new(stats_w, 36.0),
-                    egui::Layout::top_down(egui::Align::Min),
-                    |ui| {
-                        ui.set_max_height(36.0);
-                        egui::ScrollArea::horizontal()
-                            .id_salt("top_hud_scroll")
-                            .max_height(36.0)
-                            .auto_shrink([false, true])
-                            .show(ui, |ui| {
-                                ui.horizontal_centered(|ui| {
-                                    ui.spacing_mut().item_spacing.x = 5.0;
-                                    if let Some(pid) = &state.player_country_id {
-                                        if let Some(c) = state.countries.get(pid) {
-                                            draw_country_shield(ui, Vec2::new(34.0, 28.0), c);
-                                            ui.vertical(|ui| {
-                                                ui.spacing_mut().item_spacing.y = 0.0;
-                                                ui.label(
-                                                    RichText::new(c.name.to_uppercase())
-                                                        .strong()
-                                                        .size(12.5)
-                                                        .color(ACCENT_GOLD),
-                                                );
-                                                if let Some(ruling) = c.ruling_party() {
-                                                    ui.label(
-                                                        RichText::new(format!(
-                                                            "{} • {}",
-                                                            ruling.acronym, ruling.ideology
-                                                        ))
-                                                        .size(9.5)
-                                                        .color(TEXT_MUTED),
-                                                    );
-                                                }
-                                            });
-                                            ui.add_space(3.0);
-
-                                            stat_slot(
-                                                ui,
-                                                GameIcon::Population,
-                                                "POB",
-                                                &format_population(c.population),
-                                                TEXT_PRIMARY,
-                                            );
-                                            stat_slot(
-                                                ui,
-                                                GameIcon::Treasury,
-                                                "TESORERÍA",
-                                                &format_usd_millions(c.economy.treasury_usd_millions),
-                                                ACCENT_EMERALD,
-                                            );
-                                            stat_slot(
-                                                ui,
-                                                GameIcon::Currency,
-                                                &c.economy.currency_code,
-                                                &format!("{:.2}/USD", c.economy.exchange_rate_usd),
-                                                ACCENT_CYAN,
-                                            );
-                                            stat_slot(
-                                                ui,
-                                                GameIcon::Growth,
-                                                "PIB",
-                                                &format!(
-                                                    "{} ({:+.1}%)",
-                                                    format_usd_millions(c.economy.gdp_usd_millions),
-                                                    c.economy.gdp_growth_pct
-                                                ),
-                                                if c.economy.gdp_growth_pct >= 0.0 {
-                                                    ACCENT_EMERALD
-                                                } else {
-                                                    ACCENT_CRIMSON
-                                                },
-                                            );
-                                            stat_slot(
-                                                ui,
-                                                GameIcon::Companies,
-                                                "DESEMPLEO",
-                                                &format!("{:.1}%", c.economy.unemployment_pct),
-                                                if c.economy.unemployment_pct <= 8.0 {
-                                                    ACCENT_EMERALD
-                                                } else {
-                                                    ACCENT_CRIMSON
-                                                },
-                                            );
-
-                                            well_frame()
-                                                .inner_margin(Margin::symmetric(7, 3))
-                                                .show(ui, |ui| {
-                                                    ui.vertical(|ui| {
-                                                        ui.spacing_mut().item_spacing.y = 1.0;
-                                                        ui.label(
-                                                            RichText::new("ESTABILIDAD")
-                                                                .size(9.0)
-                                                                .color(TEXT_MUTED),
-                                                        );
-                                                        draw_gauge_bar(
-                                                            ui,
-                                                            68.0,
-                                                            13.0,
-                                                            (c.stability / 100.0) as f32,
-                                                            if c.stability >= 55.0 {
-                                                                ACCENT_EMERALD
-                                                            } else {
-                                                                ACCENT_CRIMSON
-                                                            },
-                                                            &format!("{:.0}%", c.stability),
-                                                        );
-                                                    });
-                                                });
-                                        }
-                                    }
-                                });
-                            });
-                    },
-                );
-
-                // Bloque derecho fijado: Reloj en tiempo real, Pausa/Play y Velocidad [1x][2x][3x]
-                ui.allocate_ui_with_layout(
-                    Vec2::new(controls_w, 36.0),
-                    egui::Layout::right_to_left(egui::Align::Center),
-                    |ui| {
-                        ui.set_max_height(36.0);
-                        ui.spacing_mut().item_spacing.x = 5.0;
-
-                        for spd in [3_u8, 2, 1] {
-                            let selected = state.speed_level == spd;
-                            if game_button(
-                                ui,
-                                Vec2::new(30.0, 32.0),
-                                &format!("{spd}x"),
-                                None,
-                                selected,
-                                Some(ACCENT_CYAN),
-                            )
-                            .clicked()
-                            {
-                                action = TopBarAction::SetSpeed(spd);
-                            }
-                        }
-
-                        let pause_icon = if state.paused {
-                            GameIcon::Play
-                        } else {
-                            GameIcon::Pause
-                        };
-                        if game_button(
-                            ui,
-                            Vec2::new(34.0, 32.0),
-                            "",
-                            Some(pause_icon),
-                            !state.paused,
-                            Some(ACCENT_EMERALD),
-                        )
-                        .clicked()
-                        {
-                            action = TopBarAction::TogglePause;
-                        }
-
-                        well_frame()
-                            .inner_margin(Margin::symmetric(8, 3))
-                            .show(ui, |ui| {
-                                ui.vertical(|ui| {
-                                    ui.spacing_mut().item_spacing.y = 0.0;
-                                    ui.label(
-                                        RichText::new(state.date_label().to_uppercase())
-                                            .strong()
-                                            .size(11.5)
-                                            .color(ACCENT_GOLD),
-                                    );
-                                    let status_lbl = if state.paused {
-                                        format!("DÍA {} • PAUSA", state.total_days)
-                                    } else {
-                                        format!("DÍA {} • EN VIVO", state.total_days)
-                                    };
-                                    ui.label(
-                                        RichText::new(status_lbl)
-                                            .size(9.0)
-                                            .color(if state.paused {
-                                                TEXT_MUTED
-                                            } else {
-                                                ACCENT_EMERALD
-                                            }),
-                                    );
-                                });
-                            });
-                    },
-                );
-            });
+            let scroll = egui::ScrollArea::horizontal().id_salt("top_hud_scroll");
+            action = render_top_hud_inner(ui, state, scroll);
         });
+
+    action
+}
+
+/// Barra superior flotante translúcida sobre el mapa 3D a pantalla completa.
+pub fn render_floating_top_hud(
+    ctx: &egui::Context,
+    state: &GameState,
+    _sim_busy: bool,
+) -> (TopBarAction, Rect) {
+    let mut action = TopBarAction::None;
+    let screen = ctx.screen_rect();
+    let max_w = (screen.width() - 16.0 - (SAFE_RIGHT_PAD as f32)).max(320.0);
+
+    let area_resp = egui::Area::new(egui::Id::new("floating_top_hud_area"))
+        .anchor(egui::Align2::LEFT_TOP, [8.0, 6.0])
+        .order(egui::Order::Foreground)
+        .show(ctx, |ui| {
+            ui.set_width(max_w);
+            let frame_resp = floating_hud_frame(true).show(ui, |ui| {
+                let scroll = egui::ScrollArea::horizontal().id_salt("floating_top_hud_scroll");
+                action = render_top_hud_inner(ui, state, scroll);
+            });
+            draw_corner_rivets(ui.painter(), frame_resp.response.rect, BORDER_BRASS);
+        });
+
+    (action, area_resp.response.rect)
+}
+
+fn render_top_hud_inner(
+    ui: &mut Ui,
+    state: &GameState,
+    scroll: egui::ScrollArea,
+) -> TopBarAction {
+    let mut action = TopBarAction::None;
+    ui.set_height(38.0);
+    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+    ui.spacing_mut().scroll.bar_width = 3.0;
+
+    let total_w = ui.available_width().max(320.0);
+    let controls_w = 248.0_f32.min((total_w - 140.0).max(210.0));
+    let stats_w = (total_w - controls_w - 10.0).max(120.0);
+
+    ui.horizontal_centered(|ui| {
+        // Bloque izquierdo desplazable: Escudo nacional + cajas de métricas tácticas
+        ui.allocate_ui_with_layout(
+            Vec2::new(stats_w, 36.0),
+            egui::Layout::top_down(egui::Align::Min),
+            |ui| {
+                ui.set_max_height(36.0);
+                scroll
+                    .max_height(36.0)
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        ui.horizontal_centered(|ui| {
+                            ui.spacing_mut().item_spacing.x = 5.0;
+                            if let Some(pid) = &state.player_country_id {
+                                if let Some(c) = state.countries.get(pid) {
+                                    draw_country_shield(ui, Vec2::new(34.0, 28.0), c);
+                                    ui.vertical(|ui| {
+                                        ui.spacing_mut().item_spacing.y = 0.0;
+                                        ui.label(
+                                            RichText::new(c.name.to_uppercase())
+                                                .strong()
+                                                .size(12.5)
+                                                .color(ACCENT_GOLD),
+                                        );
+                                        if let Some(ruling) = c.ruling_party() {
+                                            ui.label(
+                                                RichText::new(format!(
+                                                    "{} • {}",
+                                                    ruling.acronym, ruling.ideology
+                                                ))
+                                                .size(9.5)
+                                                .color(TEXT_MUTED),
+                                            );
+                                        }
+                                    });
+                                    ui.add_space(3.0);
+
+                                    stat_slot(
+                                        ui,
+                                        GameIcon::Population,
+                                        "POB",
+                                        &format_population(c.population),
+                                        TEXT_PRIMARY,
+                                    );
+                                    stat_slot(
+                                        ui,
+                                        GameIcon::Treasury,
+                                        "TESORERÍA",
+                                        &format_usd_millions(c.economy.treasury_usd_millions),
+                                        ACCENT_EMERALD,
+                                    );
+                                    stat_slot(
+                                        ui,
+                                        GameIcon::Currency,
+                                        &c.economy.currency_code,
+                                        &format!("{:.2}/USD", c.economy.exchange_rate_usd),
+                                        ACCENT_CYAN,
+                                    );
+                                    stat_slot(
+                                        ui,
+                                        GameIcon::Growth,
+                                        "PIB",
+                                        &format!(
+                                            "{} ({:+.1}%)",
+                                            format_usd_millions(c.economy.gdp_usd_millions),
+                                            c.economy.gdp_growth_pct
+                                        ),
+                                        if c.economy.gdp_growth_pct >= 0.0 {
+                                            ACCENT_EMERALD
+                                        } else {
+                                            ACCENT_CRIMSON
+                                        },
+                                    );
+                                    stat_slot(
+                                        ui,
+                                        GameIcon::Companies,
+                                        "DESEMPLEO",
+                                        &format!("{:.1}%", c.economy.unemployment_pct),
+                                        if c.economy.unemployment_pct <= 8.0 {
+                                            ACCENT_EMERALD
+                                        } else {
+                                            ACCENT_CRIMSON
+                                        },
+                                    );
+
+                                    well_frame()
+                                        .inner_margin(Margin::symmetric(7, 3))
+                                        .show(ui, |ui| {
+                                            ui.vertical(|ui| {
+                                                ui.spacing_mut().item_spacing.y = 1.0;
+                                                ui.label(
+                                                    RichText::new("ESTABILIDAD")
+                                                        .size(9.0)
+                                                        .color(TEXT_MUTED),
+                                                );
+                                                draw_gauge_bar(
+                                                    ui,
+                                                    68.0,
+                                                    13.0,
+                                                    (c.stability / 100.0) as f32,
+                                                    if c.stability >= 55.0 {
+                                                        ACCENT_EMERALD
+                                                    } else {
+                                                        ACCENT_CRIMSON
+                                                    },
+                                                    &format!("{:.0}%", c.stability),
+                                                );
+                                            });
+                                        });
+                                }
+                            }
+                        });
+                    });
+            },
+        );
+
+        // Bloque derecho fijado: Reloj en tiempo real, Pausa/Play y Velocidad [1x][2x][3x]
+        ui.allocate_ui_with_layout(
+            Vec2::new(controls_w, 36.0),
+            egui::Layout::right_to_left(egui::Align::Center),
+            |ui| {
+                ui.set_max_height(36.0);
+                ui.spacing_mut().item_spacing.x = 5.0;
+
+                for spd in [3_u8, 2, 1] {
+                    let selected = state.speed_level == spd;
+                    if game_button(
+                        ui,
+                        Vec2::new(30.0, 32.0),
+                        &format!("{spd}x"),
+                        None,
+                        selected,
+                        Some(ACCENT_CYAN),
+                    )
+                    .clicked()
+                    {
+                        action = TopBarAction::SetSpeed(spd);
+                    }
+                }
+
+                let pause_icon = if state.paused {
+                    GameIcon::Play
+                } else {
+                    GameIcon::Pause
+                };
+                if game_button(
+                    ui,
+                    Vec2::new(34.0, 32.0),
+                    "",
+                    Some(pause_icon),
+                    !state.paused,
+                    Some(ACCENT_EMERALD),
+                )
+                .clicked()
+                {
+                    action = TopBarAction::TogglePause;
+                }
+
+                well_frame()
+                    .inner_margin(Margin::symmetric(8, 3))
+                    .show(ui, |ui| {
+                        ui.vertical(|ui| {
+                            ui.spacing_mut().item_spacing.y = 0.0;
+                            ui.label(
+                                RichText::new(state.date_label().to_uppercase())
+                                    .strong()
+                                    .size(11.5)
+                                    .color(ACCENT_GOLD),
+                            );
+                            let status_lbl = if state.paused {
+                                format!("DÍA {} • PAUSA", state.total_days)
+                            } else {
+                                format!("DÍA {} • EN VIVO", state.total_days)
+                            };
+                            ui.label(
+                                RichText::new(status_lbl)
+                                    .size(9.0)
+                                    .color(if state.paused {
+                                        TEXT_MUTED
+                                    } else {
+                                        ACCENT_EMERALD
+                                    }),
+                            );
+                        });
+                    });
+            },
+        );
+    });
 
     action
 }
@@ -244,8 +281,49 @@ fn stat_slot(ui: &mut Ui, icon: GameIcon, label: &str, value: &str, color: Color
         });
 }
 
-/// Barra inferior horizontal con botones táctiles remachados e íconos para cambiar entre pantallas.
+/// Barra inferior horizontal fija para pantallas administrativas.
 pub fn render_bottom_nav(ui: &mut Ui, current: ScreenRoute) -> Option<ScreenRoute> {
+    let mut next_route = None;
+    panel_frame(false)
+        .inner_margin(Margin::symmetric(8, 4))
+        .show(ui, |ui| {
+            let scroll = egui::ScrollArea::horizontal().id_salt("bottom_nav_scroll");
+            next_route = render_bottom_nav_inner(ui, current, scroll, ui.available_width());
+        });
+    next_route
+}
+
+/// Dock inferior flotante estilo Gran Estrategia sobre el mapa 3D a pantalla completa.
+pub fn render_floating_bottom_nav(
+    ctx: &egui::Context,
+    current: ScreenRoute,
+) -> (Option<ScreenRoute>, Rect) {
+    let mut next_route = None;
+    let screen = ctx.screen_rect();
+    let max_w = (screen.width() - 24.0 - (SAFE_RIGHT_PAD as f32)).clamp(320.0, 820.0);
+    let right_offset = -((SAFE_RIGHT_PAD as f32) * 0.45);
+
+    let area_resp = egui::Area::new(egui::Id::new("floating_bottom_nav_area"))
+        .anchor(egui::Align2::CENTER_BOTTOM, [right_offset, -6.0])
+        .order(egui::Order::Foreground)
+        .show(ctx, |ui| {
+            ui.set_max_width(max_w);
+            let frame_resp = floating_dock_frame().show(ui, |ui| {
+                let scroll = egui::ScrollArea::horizontal().id_salt("floating_bottom_nav_scroll");
+                next_route = render_bottom_nav_inner(ui, current, scroll, max_w - 18.0);
+            });
+            draw_corner_rivets(ui.painter(), frame_resp.response.rect, BORDER_BRASS);
+        });
+
+    (next_route, area_resp.response.rect)
+}
+
+fn render_bottom_nav_inner(
+    ui: &mut Ui,
+    current: ScreenRoute,
+    scroll: egui::ScrollArea,
+    avail_w: f32,
+) -> Option<ScreenRoute> {
     let mut next_route = None;
     let tabs = [
         (ScreenRoute::WorldMap, GameIcon::Map, "Mapa"),
@@ -257,36 +335,30 @@ pub fn render_bottom_nav(ui: &mut Ui, current: ScreenRoute) -> Option<ScreenRout
         (ScreenRoute::Settings, GameIcon::Settings, "Opciones"),
     ];
 
-    panel_frame(false)
-        .inner_margin(Margin::symmetric(8, 4))
+    ui.set_height(36.0);
+    ui.spacing_mut().scroll.bar_width = 3.0;
+    let tab_w = ((avail_w.max(320.0) - 48.0) / 7.0).clamp(88.0, 128.0);
+    scroll
+        .max_height(36.0)
+        .auto_shrink([false, true])
         .show(ui, |ui| {
-            ui.set_height(36.0);
-            ui.spacing_mut().scroll.bar_width = 3.0;
-            let avail_w = ui.available_width().max(320.0);
-            let tab_w = ((avail_w - 48.0) / 7.0).clamp(90.0, 140.0);
-            egui::ScrollArea::horizontal()
-                .id_salt("bottom_nav_scroll")
-                .max_height(36.0)
-                .auto_shrink([false, true])
-                .show(ui, |ui| {
-                    ui.horizontal_centered(|ui| {
-                        for (route, icon, title) in tabs {
-                            let active = current == route;
-                            if game_button(
-                                ui,
-                                Vec2::new(tab_w, 33.0),
-                                title,
-                                Some(icon),
-                                active,
-                                Some(ACCENT_GOLD),
-                            )
-                            .clicked()
-                            {
-                                next_route = Some(route);
-                            }
-                        }
-                    });
-                });
+            ui.horizontal_centered(|ui| {
+                for (route, icon, title) in tabs {
+                    let active = current == route;
+                    if game_button(
+                        ui,
+                        Vec2::new(tab_w, 33.0),
+                        title,
+                        Some(icon),
+                        active,
+                        Some(ACCENT_GOLD),
+                    )
+                    .clicked()
+                    {
+                        next_route = Some(route);
+                    }
+                }
+            });
         });
 
     next_route

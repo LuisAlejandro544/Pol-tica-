@@ -112,15 +112,46 @@ pub fn panel_frame(brass: bool) -> egui::Frame {
             if brass { 1.5_f32 } else { 1.0_f32 },
             if brass { BORDER_BRASS } else { BORDER_SUBTLE },
         ))
-        .corner_radius(CornerRadius::same(4))
+        .corner_radius(CornerRadius::same(5))
         .inner_margin(10.0)
+}
+
+pub fn floating_hud_frame(brass: bool) -> egui::Frame {
+    egui::Frame::new()
+        .fill(Color32::from_rgba_unmultiplied(11, 17, 27, 224))
+        .stroke(Stroke::new(
+            if brass { 1.5_f32 } else { 1.0_f32 },
+            if brass { BORDER_BRASS } else { BORDER_SUBTLE },
+        ))
+        .corner_radius(CornerRadius::same(6))
+        .shadow(egui::Shadow {
+            offset: [0, 4],
+            blur: 12,
+            spread: 0,
+            color: Color32::from_rgba_unmultiplied(0, 0, 0, 145),
+        })
+        .inner_margin(Margin::symmetric(8, 4))
+}
+
+pub fn floating_dock_frame() -> egui::Frame {
+    egui::Frame::new()
+        .fill(Color32::from_rgba_unmultiplied(12, 19, 30, 232))
+        .stroke(Stroke::new(1.5_f32, BORDER_BRASS))
+        .corner_radius(CornerRadius::same(7))
+        .shadow(egui::Shadow {
+            offset: [0, 4],
+            blur: 14,
+            spread: 0,
+            color: Color32::from_rgba_unmultiplied(0, 0, 0, 165),
+        })
+        .inner_margin(Margin::symmetric(8, 5))
 }
 
 pub fn card_frame(accent_border: Option<Color32>) -> egui::Frame {
     egui::Frame::new()
         .fill(BG_CARD)
         .stroke(Stroke::new(1.0_f32, accent_border.unwrap_or(BORDER_SUBTLE)))
-        .corner_radius(CornerRadius::same(3))
+        .corner_radius(CornerRadius::same(4))
         .inner_margin(8.0)
 }
 
@@ -128,7 +159,7 @@ pub fn well_frame() -> egui::Frame {
     egui::Frame::new()
         .fill(BG_WELL)
         .stroke(Stroke::new(1.0_f32, BORDER_BRASS_DIM))
-        .corner_radius(CornerRadius::same(3))
+        .corner_radius(CornerRadius::same(4))
         .inner_margin(Margin::symmetric(8, 5))
 }
 
@@ -199,22 +230,34 @@ pub fn game_button(
         };
 
         let p = ui.painter();
-        p.rect_filled(rect, CornerRadius::same(4), fill);
+        p.rect_filled(rect, CornerRadius::same(5), fill);
         p.rect_stroke(
             rect,
-            CornerRadius::same(4),
+            CornerRadius::same(5),
             Stroke::new(if active || hovered { 1.5_f32 } else { 1.0_f32 }, border_col),
             egui::StrokeKind::Inside,
         );
 
-        // Bisel superior metálico
+        // Bisel superior metálico y sombra inferior para sensación táctil física
         let top_y = rect.top() + 1.5;
         let bevel_col = if active {
-            Color32::from_rgba_unmultiplied(255, 245, 210, 110)
+            Color32::from_rgba_unmultiplied(255, 245, 210, 125)
         } else {
-            Color32::from_rgba_unmultiplied(150, 185, 225, 45)
+            Color32::from_rgba_unmultiplied(165, 198, 235, 55)
         };
         p.hline((rect.left() + 3.0)..=(rect.right() - 3.0), top_y, Stroke::new(1.0_f32, bevel_col));
+        p.hline(
+            (rect.left() + 3.0)..=(rect.right() - 3.0),
+            rect.bottom() - 1.5,
+            Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(0, 0, 0, 80)),
+        );
+        if active {
+            p.hline(
+                (rect.left() + 6.0)..=(rect.right() - 6.0),
+                rect.bottom() - 2.5,
+                Stroke::new(1.5_f32, ACCENT_GOLD),
+            );
+        }
 
         let fg = if active { TEXT_DARK } else { TEXT_PRIMARY };
         let mut font_size = if size.y >= 38.0 { 13.5 } else { 12.0 };
@@ -317,6 +360,15 @@ pub fn draw_gauge_bar(
             Vec2::new(fill_w, (rect.height() - 2.0).max(2.0)),
         );
         p.rect_filled(fill_rect, CornerRadius::same(2), fill_color);
+        let sheen_rect = Rect::from_min_size(
+            fill_rect.min,
+            Vec2::new(fill_rect.width(), (fill_rect.height() * 0.42).max(2.0)),
+        );
+        p.rect_filled(
+            sheen_rect,
+            CornerRadius::same(1),
+            Color32::from_rgba_unmultiplied(255, 255, 255, 34),
+        );
     }
 
     p.rect_stroke(
