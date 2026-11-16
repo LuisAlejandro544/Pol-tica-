@@ -2,13 +2,13 @@
 Propósito del archivo (Blender Python `bpy` + `bmesh`):
 Generador 3D táctico de Latinoamérica para Horizonte Latam.
 Descarga datos GeoJSON de Dominio Público (Natural Earth Admin-1 provincias,
-ciudades/capitales y ríos principales) y construye un modelo `.glb` listo para `wgpu` + `gltf`:
-  1. Colores corregidos con conversión real sRGB -> Linear RGB y materiales PBR mate tácticos.
-  2. Bordes nítidos diferenciados: fronteras internacionales, bordes provinciales y costas.
-  3. Océano dinámico con batimetría costera (Vertex Colors), cuadrícula cartográfica (Ecuador/Trópicos) y marco.
-  4. Relieve topográfico continuo por vértice (Cordillera de los Andes, Altiplano, Sierra Madre, Mesetas)
-     y red de ríos principales (Amazonas, Paraná, Orinoco, Magdalena, Río Grande, etc.).
-  5. Marcadores 3D visibles para capitales nacionales (torre dorada) y provinciales (pin plateado).
+ciudades/capitales y ríos principales) y construye un modelo `.glb` optimizado para móvil (`wgpu` + `gltf`):
+  1. Colores corregidos con conversión sRGB -> Linear RGB y materiales compartidos por país
+     usando `Vertex Colors` (~28 materiales totales en lugar de ~400 para reducir draw calls).
+  2. Bordes nítidos subdivididos sobre el relieve con uniones sin grietas (internacionales, provinciales, costas).
+  3. Océano con batimetría costera luminosa y azul profundo legible, cuadrícula cartográfica y marco de latón.
+  4. Relieve andino suavizado (`smooth shading` solo en caras superiores, acantilados planos) y ríos subdivididos.
+  5. Capitales nacionales destacadas (torre dorada) y capitales provinciales compactas (medallones bajos).
 Exporta `latinoamerica_3d.glb` y el catálogo `provinces_latam.lua`.
 """
 
@@ -69,7 +69,7 @@ def download_if_needed(url: str, dest_path: str):
         return
     os.makedirs(os.path.dirname(dest_path), exist_ok=True)
     print(f"[Descarga] Obteniendo GeoJSON desde {url} ...")
-    req = urllib.request.Request(url, headers={"User-Agent": "HorizonteLatam-MapBuilder/2.0"})
+    req = urllib.request.Request(url, headers={"User-Agent": "HorizonteLatam-MapBuilder/3.0"})
     with urllib.request.urlopen(req, timeout=120) as resp, open(dest_path, "wb") as out:
         out.write(resp.read())
     print(f"[Descarga] Guardado en {dest_path}")
@@ -105,28 +105,19 @@ def unproject_xy(x: float, y: float) -> tuple[float, float]:
 
 
 def elevation_at_lon_lat(lon: float, lat: float) -> float:
-    """
-    Relieve topográfico continuo de Latinoamérica en unidades Blender:
-    - Cordillera de los Andes (curva realista de Venezuela/Colombia -> Perú -> Altiplano -> Chile/Argentina)
-    - Escudo Guayanés y Meseta Brasileña
-    - Sierra Madre Oriental/Occidental y cordillera centroamericana
-    Al ser determinista por (lon, lat), provincias vecinas comparten exactamente la misma altura en su frontera.
-    """
+    """Relieve topográfico continuo determinista por (lon, lat) para evitar grietas en fronteras."""
     elev = 0.0
 
     # 1. Cordillera de los Andes (-55.5° hasta +11.5°)
     if -56.0 <= lat <= 12.0:
         if lat < -18.0:
-            # Tramo sur/central Chile-Argentina-Bolivia: de -71° en Patagonia a -68° en Altiplano
             spine_lon = -71.5 + ((lat + 55.0) / 37.0) * 3.8
             width = 3.2 if lat > -26.0 else 2.2
         elif lat < -5.0:
-            # Tramo Altiplano -> Perú: gira hacia el noroeste (-68° a -77.5°)
             t = (lat + 18.0) / 13.0
             spine_lon = -67.7 - t * 9.5
             width = 4.6 - t * 1.4
         else:
-            # Ecuador -> Colombia -> Mérida (Venezuela)
             t = (lat + 5.0) / 17.0
             spine_lon = -77.2 + t * 4.5
             width = 2.8
@@ -134,25 +125,23 @@ def elevation_at_lon_lat(lon: float, lat: float) -> float:
         dist = abs(lon - spine_lon)
         if dist < width * 1.6:
             ridge = math.exp(-(dist * dist) / (2.0 * (width * 0.55) ** 2))
-            # Ondulación natural de picos y valles andinos
             peaks = 0.78 + 0.22 * math.sin(lat * 1.35 + lon * 0.9) * math.cos(lon * 1.7)
             elev = max(elev, ridge * 1.65 * peaks)
 
-    # 2. Meseta Brasileña / Planalto Central y Serra do Mar
+    # 2. Meseta Brasileña / Planalto Central
     if -28.0 <= lat <= -4.0 and -52.0 <= lon <= -38.0:
         d_br = math.hypot((lon + 45.0) / 7.5, (lat + 15.0) / 9.5)
         if d_br < 1.2:
             elev = max(elev, (1.2 - d_br) * 0.42)
 
-    # 3. Escudo Guayanés / Sur de Venezuela
+    # 3. Escudo Guayanés
     if 1.0 <= lat <= 7.5 and -67.0 <= lon <= -59.0:
         d_gu = math.hypot((lon + 63.0) / 4.5, (lat + 4.0) / 4.0)
         if d_gu < 1.3:
             elev = max(elev, (1.3 - d_gu) * 0.48)
 
-    # 4. Sierra Madre y Eje Neovolcánico (México) + Cordillera Centroamericana
+    # 4. Sierra Madre y Cordillera Centroamericana
     if 8.0 <= lat <= 31.0 and -111.0 <= lon <= -82.0:
-        # Eje aproximado desde Sonora (-109, 29) hasta Costa Rica (-83.5, 9.5)
         t = max(0.0, min(1.0, (30.0 - lat) / 21.0))
         mex_spine = -107.0 + t * 23.0
         dist_m = abs(lon - mex_spine)
@@ -208,8 +197,7 @@ def douglas_peucker(pts: list[tuple[float, float]], tol: float) -> list[tuple[fl
     return simplified if len(simplified) >= 3 else pts[:3]
 
 
-def dedupe_projected_ring(pts: list[tuple[float, float]], min_dist: float = 0.02) -> list[tuple[float, float]]:
-    """Elimina vértices casi coincidentes antes de triangular para evitar triángulos de área cero."""
+def dedupe_projected_ring(pts: list[tuple[float, float]], min_dist: float = 0.025) -> list[tuple[float, float]]:
     cleaned = []
     for p in pts:
         if not cleaned or math.hypot(p[0] - cleaned[-1][0], p[1] - cleaned[-1][1]) >= min_dist:
@@ -250,8 +238,8 @@ def make_material(
     name: str,
     rgb_255: list[int],
     color_scale: float = 1.0,
-    roughness: float = 0.86,
-    specular: float = 0.12,
+    roughness: float = 0.88,
+    specular: float = 0.10,
     emission_strength: float = 0.0,
 ):
     mat = bpy.data.materials.new(name=name)
@@ -268,8 +256,8 @@ def make_material(
     return mat
 
 
-def make_vertex_color_material(name: str, roughness: float = 0.55, specular: float = 0.22):
-    """Material conectado al atributo `Color` de vértices para la batimetría oceánica."""
+def make_vertex_color_material(name: str, roughness: float = 0.88, specular: float = 0.10):
+    """Material compartido basado en atributo de color por vértice (`COLOR_0`) para reducir draw calls."""
     mat = bpy.data.materials.new(name=name)
     mat.use_nodes = True
     nt = mat.node_tree
@@ -311,7 +299,8 @@ def build_province_mesh(
     rings_lon_lat: list[list[tuple[float, float]]],
     simplify_tol: float,
     base_extrude: float,
-    material,
+    shared_country_material,
+    province_linear_rgba: tuple[float, float, float, float],
     collection,
     extras: dict,
     border_segments_out: list,
@@ -340,7 +329,6 @@ def build_province_mesh(
         area = abs(signed_a)
         if area < 0.004:
             continue
-        # Asegurar orientación antihoraria consistente para normales limpias
         if signed_a < 0.0:
             proj_pts.reverse()
 
@@ -349,14 +337,12 @@ def build_province_mesh(
         cy = sum(p[1] for p in proj_pts) / len(proj_pts)
         all_centroids.append((cx, cy, area))
 
-        # Guardar puntos para batimetría y segmentos para bordes nítidos
         for i in range(len(proj_pts)):
             p0 = proj_pts[i]
             p1 = proj_pts[(i + 1) % len(proj_pts)]
             land_points_out.append(p0)
             border_segments_out.append((country_id, p0, p1))
 
-        # Crear cara base en z=0
         bottom_verts = [bm.verts.new((x, y, 0.0)) for (x, y) in proj_pts]
         bm.verts.ensure_lookup_table()
         try:
@@ -364,7 +350,6 @@ def build_province_mesh(
         except ValueError:
             continue
 
-        # Extruir hacia arriba para formar bloque sólido cerrado
         res = bmesh.ops.extrude_face_region(bm, geom=[face])
         extruded_verts = [ele for ele in res["geom"] if isinstance(ele, bmesh.types.BMVert)]
         for v in extruded_verts:
@@ -374,18 +359,17 @@ def build_province_mesh(
         bm.free()
         return None
 
-    # Triangular primero para poder subdividir triángulos largos y esculpir relieve continuo
     bmesh.ops.recalc_face_normals(bm, faces=list(bm.faces))
     bmesh.ops.triangulate(bm, faces=list(bm.faces), quad_method="BEAUTY", ngon_method="BEAUTY")
 
-    # Subdividir aristas superiores largas (> 1.4 unidades) para que los Andes tengan curvas suaves
-    for _pass in range(2):
+    # 3 pasadas de subdivisión en aristas superiores largas (> 1.1) para suavizar laderas andinas y Pampa
+    for _pass in range(3):
         long_top_edges = [
             e
             for e in bm.edges
             if e.verts[0].co.z > 0.05
             and e.verts[1].co.z > 0.05
-            and (e.verts[0].co - e.verts[1].co).length > 1.45
+            and (e.verts[0].co - e.verts[1].co).length > 1.15
         ]
         if not long_top_edges:
             break
@@ -400,16 +384,23 @@ def build_province_mesh(
             v.co.z = base_extrude + rel
             elev_samples.append(rel)
 
-    # Limpiar aristas/triángulos degenerados de área cero
     bmesh.ops.dissolve_degenerate(bm, dist=0.002, edges=list(bm.edges))
     bmesh.ops.recalc_face_normals(bm, faces=list(bm.faces))
+
+    # Smooth shading únicamente en caras superiores del terreno (manteniendo acantilados laterales planos)
+    # y color de provincia en Vertex Color para compartir 1 material por país
+    color_layer = bm.loops.layers.color.new("Color")
+    for f in bm.faces:
+        f.smooth = f.normal.z > 0.35
+        for loop in f.loops:
+            loop[color_layer] = province_linear_rgba
 
     mesh = bpy.data.meshes.new(mesh_name)
     bm.to_mesh(mesh)
     bm.free()
 
     obj = bpy.data.objects.new(mesh_name, mesh)
-    obj.data.materials.append(material)
+    obj.data.materials.append(shared_country_material)
     for k, v in extras.items():
         obj[k] = v
     collection.objects.link(obj)
@@ -429,7 +420,71 @@ def build_province_mesh(
     }
 
 
-def add_ribbon_segment_to_bmesh(
+def add_joint_cap(bm: bmesh.types.BMesh, p: tuple[float, float], radius: float, z: float):
+    """Pequeño disco hexagonal en vértices de giro para evitar muescas o grietas en curvas cerradas."""
+    verts = []
+    for k in range(6):
+        ang = (math.pi * 2.0 * k) / 6.0
+        verts.append(bm.verts.new((p[0] + math.cos(ang) * radius, p[1] + math.sin(ang) * radius, z)))
+    try:
+        bm.faces.new(verts)
+    except ValueError:
+        pass
+
+
+def add_subdivided_draped_segment(
+    bm: bmesh.types.BMesh,
+    p0: tuple[float, float],
+    p1: tuple[float, float],
+    width: float,
+    base_extrude: float,
+    z_offset: float,
+    max_step: float = 0.35,
+    add_caps: bool = True,
+):
+    """
+    Subdivide cualquier tramo largo en pasos de <= `max_step` y muestrea la elevación real
+    en cada punto intermedio, evitando que bordes y ríos se hundan en laderas andinas.
+    """
+    seg_len = math.hypot(p1[0] - p0[0], p1[1] - p0[1])
+    if seg_len < 1e-4:
+        return
+    steps = max(1, int(math.ceil(seg_len / max_step)))
+
+    pts_xyz = []
+    for s in range(steps + 1):
+        t = s / steps
+        x = p0[0] + (p1[0] - p0[0]) * t
+        y = p0[1] + (p1[1] - p0[1]) * t
+        lon, lat = unproject_xy(x, y)
+        z = base_extrude + elevation_at_lon_lat(lon, lat) + z_offset
+        pts_xyz.append((x, y, z))
+
+    for i in range(len(pts_xyz) - 1):
+        x0, y0, z0 = pts_xyz[i]
+        x1, y1, z1 = pts_xyz[i + 1]
+        dx = x1 - x0
+        dy = y1 - y0
+        l = math.hypot(dx, dy)
+        if l < 1e-4:
+            continue
+        nx = -dy / l * (width * 0.5)
+        ny = dx / l * (width * 0.5)
+        v0 = bm.verts.new((x0 - nx, y0 - ny, z0))
+        v1 = bm.verts.new((x0 + nx, y0 + ny, z0))
+        v2 = bm.verts.new((x1 + nx, y1 + ny, z1))
+        v3 = bm.verts.new((x1 - nx, y1 - ny, z1))
+        try:
+            bm.faces.new((v0, v1, v2, v3))
+        except ValueError:
+            pass
+
+    if add_caps:
+        add_joint_cap(bm, (pts_xyz[0][0], pts_xyz[0][1]), width * 0.52, pts_xyz[0][2])
+        add_joint_cap(bm, (pts_xyz[-1][0], pts_xyz[-1][1]), width * 0.52, pts_xyz[-1][2])
+
+
+def add_flat_ribbon(
     bm: bmesh.types.BMesh,
     p0: tuple[float, float],
     p1: tuple[float, float],
@@ -437,15 +492,13 @@ def add_ribbon_segment_to_bmesh(
     z0: float,
     z1: float,
 ):
-    """Agrega un segmento de cinta 3D plana/inclinada entre p0 y p1 con ancho `width`."""
     dx = p1[0] - p0[0]
     dy = p1[1] - p0[1]
-    length = math.hypot(dx, dy)
-    if length < 1e-4:
+    l = math.hypot(dx, dy)
+    if l < 1e-4:
         return
-    nx = -dy / length * (width * 0.5)
-    ny = dx / length * (width * 0.5)
-
+    nx = -dy / l * (width * 0.5)
+    ny = dx / l * (width * 0.5)
     v0 = bm.verts.new((p0[0] - nx, p0[1] - ny, z0))
     v1 = bm.verts.new((p0[0] + nx, p0[1] + ny, z0))
     v2 = bm.verts.new((p1[0] + nx, p1[1] + ny, z1))
@@ -461,12 +514,7 @@ def build_borders_layers(
     base_extrude: float,
     collection,
 ):
-    """
-    Clasifica cada segmento fronterizo mediante hash espacial:
-    - Frontera Internacional (dos países distintos vecinos): cinta gruesa oscura
-    - Frontera Provincial (mismo país, dos provincias vecinas): cinta fina gris oscuro
-    - Costa / Límite marítimo: trazo nítido oscuro
-    """
+    """Fronteras subdivididas y adaptadas al relieve sin grietas ni z-fighting."""
     cell_size = 0.16
     spatial: dict[tuple[int, int], list[tuple[str, tuple[float, float]]]] = {}
     for cid, p0, p1 in border_segments:
@@ -496,19 +544,20 @@ def build_borders_layers(
                         else:
                             same_country_other_edge += 1
 
-        lon0, lat0 = unproject_xy(p0[0], p0[1])
-        lon1, lat1 = unproject_xy(p1[0], p1[1])
-        e0 = base_extrude + elevation_at_lon_lat(lon0, lat0)
-        e1 = base_extrude + elevation_at_lon_lat(lon1, lat1)
-
         if other_country_near:
-            add_ribbon_segment_to_bmesh(bm_intl, p0, p1, width=0.13, z0=e0 + 0.032, z1=e1 + 0.032)
+            add_subdivided_draped_segment(
+                bm_intl, p0, p1, width=0.135, base_extrude=base_extrude, z_offset=0.055, max_step=0.35
+            )
         elif same_country_other_edge >= 2:
-            add_ribbon_segment_to_bmesh(bm_prov, p0, p1, width=0.055, z0=e0 + 0.020, z1=e1 + 0.020)
+            add_subdivided_draped_segment(
+                bm_prov, p0, p1, width=0.055, base_extrude=base_extrude, z_offset=0.036, max_step=0.35
+            )
         else:
-            add_ribbon_segment_to_bmesh(bm_coast, p0, p1, width=0.085, z0=e0 + 0.026, z1=e1 + 0.026)
+            add_subdivided_draped_segment(
+                bm_coast, p0, p1, width=0.085, base_extrude=base_extrude, z_offset=0.044, max_step=0.35
+            )
 
-    def finalize_border(bm, obj_name, mat_name, rgb, width_rough=0.92):
+    def finalize_border(bm, obj_name, mat_name, rgb):
         if not bm.faces:
             bm.free()
             return
@@ -517,16 +566,16 @@ def build_borders_layers(
         bm.to_mesh(mesh)
         bm.free()
         obj = bpy.data.objects.new(obj_name, mesh)
-        obj.data.materials.append(make_material(mat_name, rgb, 1.0, roughness=width_rough, specular=0.05))
+        obj.data.materials.append(make_material(mat_name, rgb, 1.0, roughness=0.92, specular=0.04))
         collection.objects.link(obj)
 
-    finalize_border(bm_intl, "BORDERS_INTERNATIONAL", "MAT_BORDER_INTL", [18, 18, 22])
+    finalize_border(bm_intl, "BORDERS_INTERNATIONAL", "MAT_BORDER_INTL", [16, 16, 20])
     finalize_border(bm_prov, "BORDERS_PROVINCIAL", "MAT_BORDER_PROV", [42, 50, 62])
     finalize_border(bm_coast, "BORDERS_COASTLINE", "MAT_BORDER_COAST", [14, 24, 38])
 
 
 def build_rivers_layer(rivers_path: str, base_extrude: float, collection):
-    """Construye los principales ríos latinoamericanos sobre el relieve 3D."""
+    """Construye los principales ríos latinoamericanos subdivididos y con uniones continuas sin cortes."""
     if not os.path.exists(rivers_path):
         return
     with open(rivers_path, "r", encoding="utf-8") as f:
@@ -551,17 +600,16 @@ def build_rivers_layer(rivers_path: str, base_extrude: float, collection):
         elif gtype == "MultiLineString":
             lines.extend(coords)
 
-        width = 0.105 if float(scalerank) <= 2.0 else (0.07 if float(scalerank) <= 4.0 else 0.048)
+        width = 0.11 if float(scalerank) <= 2.0 else (0.072 if float(scalerank) <= 4.0 else 0.05)
 
         for line in lines:
             if len(line) < 2:
                 continue
-            # Filtrar dentro del rectángulo de Latinoamérica
             pts_ll = [(float(c[0]), float(c[1])) for c in line]
             if not any(LATAM_LON_MIN <= lon <= LATAM_LON_MAX and LATAM_LAT_MIN <= lat <= LATAM_LAT_MAX for lon, lat in pts_ll):
                 continue
 
-            pts_ll = douglas_peucker(pts_ll, 0.04)
+            pts_ll = douglas_peucker(pts_ll, 0.035)
             river_count += 1
             for i in range(len(pts_ll) - 1):
                 lon0, lat0 = pts_ll[i]
@@ -570,9 +618,16 @@ def build_rivers_layer(rivers_path: str, base_extrude: float, collection):
                     continue
                 p0 = project_lon_lat(lon0, lat0)
                 p1 = project_lon_lat(lon1, lat1)
-                z0 = base_extrude + elevation_at_lon_lat(lon0, lat0) + 0.028
-                z1 = base_extrude + elevation_at_lon_lat(lon1, lat1) + 0.028
-                add_ribbon_segment_to_bmesh(bm, p0, p1, width=width, z0=z0, z1=z1)
+                add_subdivided_draped_segment(
+                    bm,
+                    p0,
+                    p1,
+                    width=width,
+                    base_extrude=base_extrude,
+                    z_offset=0.050,
+                    max_step=0.30,
+                    add_caps=True,
+                )
 
     if bm.faces:
         bmesh.ops.triangulate(bm, faces=list(bm.faces))
@@ -580,7 +635,7 @@ def build_rivers_layer(rivers_path: str, base_extrude: float, collection):
         bm.to_mesh(mesh)
         obj = bpy.data.objects.new("RIVERS_LATAM", mesh)
         obj.data.materials.append(
-            make_material("MAT_RIVERS", [44, 156, 232], 1.0, roughness=0.32, specular=0.35)
+            make_material("MAT_RIVERS", [48, 166, 242], 1.0, roughness=0.30, specular=0.35)
         )
         collection.objects.link(obj)
     bm.free()
@@ -589,14 +644,12 @@ def build_rivers_layer(rivers_path: str, base_extrude: float, collection):
 
 def create_bathymetric_ocean_and_grid(land_points: list[tuple[float, float]], collection):
     """
-    Crea un océano ajustado al marco de Latinoamérica con batimetría costera mediante
-    colores por vértice (`COLOR_0`), cuadrícula cartográfica (meridianos/paralelos/Ecuador/Trópicos)
-    y marco exterior táctico.
+    Crea el océano con batimetría costera luminosa y azul profundo legible (`[12, 38, 68]` en sRGB),
+    cuadrícula cartográfica y marco de latón.
     """
     min_x, min_y = project_lon_lat(LATAM_LON_MIN, LATAM_LAT_MIN)
     max_x, max_y = project_lon_lat(LATAM_LON_MAX, LATAM_LAT_MAX)
 
-    # Indexar puntos costeros para estimar distancia rápida a costa
     cell = 1.2
     land_hash: dict[tuple[int, int], list[tuple[float, float]]] = {}
     for lx, ly in land_points:
@@ -615,16 +668,14 @@ def create_bathymetric_ocean_and_grid(land_points: list[tuple[float, float]], co
                         best = d
         return best
 
-    nx, ny = 100, 100
+    nx, ny = 96, 96
     bm = bmesh.new()
     grid_verts = []
     for iy in range(ny + 1):
         row = []
-        ty = iy / ny
-        y = min_y + ty * (max_y - min_y)
+        y = min_y + (iy / ny) * (max_y - min_y)
         for ix in range(nx + 1):
-            tx = ix / nx
-            x = min_x + tx * (max_x - min_x)
+            x = min_x + (ix / nx) * (max_x - min_x)
             row.append(bm.verts.new((x, y, -0.02)))
         grid_verts.append(row)
 
@@ -638,9 +689,9 @@ def create_bathymetric_ocean_and_grid(land_points: list[tuple[float, float]], co
             ))
 
     color_layer = bm.loops.layers.color.new("Color")
-    shallow = srgb_to_linear_rgba([28, 104, 148])
-    mid = srgb_to_linear_rgba([14, 54, 88])
-    deep = srgb_to_linear_rgba([7, 24, 44])
+    shallow = srgb_to_linear_rgba([34, 122, 172])
+    mid = srgb_to_linear_rgba([18, 66, 108])
+    deep = srgb_to_linear_rgba([12, 38, 68])
 
     def lerp_rgba(a, b, t):
         t = max(0.0, min(1.0, t))
@@ -651,15 +702,14 @@ def create_bathymetric_ocean_and_grid(land_points: list[tuple[float, float]], co
             1.0,
         )
 
-    # Precomputar color por vértice (actualizar índices antes de indexar)
     bm.verts.index_update()
     vert_colors = {}
     for v in bm.verts:
         d = dist_to_land(v.co.x, v.co.y)
-        if d < 1.5:
-            col = lerp_rgba(shallow, mid, d / 1.5)
-        elif d < 5.0:
-            col = lerp_rgba(mid, deep, (d - 1.5) / 3.5)
+        if d < 1.6:
+            col = lerp_rgba(shallow, mid, d / 1.6)
+        elif d < 5.5:
+            col = lerp_rgba(mid, deep, (d - 1.6) / 3.9)
         else:
             col = deep
         vert_colors[v.index] = col
@@ -674,41 +724,39 @@ def create_bathymetric_ocean_and_grid(land_points: list[tuple[float, float]], co
     bm.free()
 
     ocean_obj = bpy.data.objects.new("OCEAN_BASE", ocean_mesh)
-    ocean_obj.data.materials.append(make_vertex_color_material("MAT_OCEAN_BATHYMETRY"))
+    ocean_obj.data.materials.append(make_vertex_color_material("MAT_OCEAN_BATHYMETRY", roughness=0.60, specular=0.18))
     collection.objects.link(ocean_obj)
 
-    # Cuadrícula cartográfica (meridianos y paralelos cada 10°, más Ecuador y Trópicos)
     bm_grid = bmesh.new()
     bm_tropics = bmesh.new()
 
     for lon in range(-110, -30, 10):
         p0 = project_lon_lat(float(lon), LATAM_LAT_MIN)
         p1 = project_lon_lat(float(lon), LATAM_LAT_MAX)
-        add_ribbon_segment_to_bmesh(bm_grid, p0, p1, width=0.06, z0=0.002, z1=0.002)
+        add_flat_ribbon(bm_grid, p0, p1, width=0.06, z0=0.002, z1=0.002)
 
     for lat in range(-50, 35, 10):
         p0 = project_lon_lat(LATAM_LON_MIN, float(lat))
         p1 = project_lon_lat(LATAM_LON_MAX, float(lat))
         target_bm = bm_tropics if lat == 0 else bm_grid
         w = 0.11 if lat == 0 else 0.06
-        add_ribbon_segment_to_bmesh(target_bm, p0, p1, width=w, z0=0.004, z1=0.004)
+        add_flat_ribbon(target_bm, p0, p1, width=w, z0=0.004, z1=0.004)
 
     for tropic_lat in (-23.44, 23.44):
         p0 = project_lon_lat(LATAM_LON_MIN, tropic_lat)
         p1 = project_lon_lat(LATAM_LON_MAX, tropic_lat)
-        add_ribbon_segment_to_bmesh(bm_tropics, p0, p1, width=0.08, z0=0.004, z1=0.004)
+        add_flat_ribbon(bm_tropics, p0, p1, width=0.08, z0=0.004, z1=0.004)
 
-    # Marco perimetral cartográfico en latón oscuro
     corners = [(min_x, min_y), (max_x, min_y), (max_x, max_y), (min_x, max_y)]
     for i in range(4):
-        add_ribbon_segment_to_bmesh(bm_tropics, corners[i], corners[(i + 1) % 4], width=0.35, z0=0.02, z1=0.02)
+        add_flat_ribbon(bm_tropics, corners[i], corners[(i + 1) % 4], width=0.35, z0=0.02, z1=0.02)
 
     if bm_grid.faces:
         bmesh.ops.triangulate(bm_grid, faces=list(bm_grid.faces))
         gm = bpy.data.meshes.new("MAP_GRID_LINES_MESH")
         bm_grid.to_mesh(gm)
         go = bpy.data.objects.new("MAP_GRID_LINES", gm)
-        go.data.materials.append(make_material("MAT_MAP_GRID", [38, 86, 128], 1.0, roughness=0.8, specular=0.1))
+        go.data.materials.append(make_material("MAT_MAP_GRID", [52, 106, 152], 1.0, roughness=0.8, specular=0.1))
         collection.objects.link(go)
     bm_grid.free()
 
@@ -731,13 +779,11 @@ def create_capital_marker(
     extras: dict,
 ):
     """
-    Crea marcadores 3D claramente visibles desde vista continental:
-    - Capitales nacionales: pedestal octagonal + aguja obelisco dorada alta.
-    - Capitales provinciales: disco base + pin táctico plateado/cian.
+    Capitales nacionales: pedestal octagonal + torre obelisco dorada alta y visible.
+    Capitales provinciales: medallón compacto y bajo (sin picos blancos invasivos).
     """
     bm = bmesh.new()
     if is_national:
-        # Base pedestal
         bmesh.ops.create_cone(
             bm,
             cap_ends=True,
@@ -748,7 +794,6 @@ def create_capital_marker(
             depth=0.16,
             matrix=Matrix.Translation((0.0, 0.0, 0.08)),
         )
-        # Torre obelisco
         bmesh.ops.create_cone(
             bm,
             cap_ends=True,
@@ -760,25 +805,16 @@ def create_capital_marker(
             matrix=Matrix.Translation((0.0, 0.0, 0.68)),
         )
     else:
+        # Medallón plano compacto en lugar de conos blancos gigantes
         bmesh.ops.create_cone(
             bm,
             cap_ends=True,
             cap_tris=True,
             segments=8,
-            radius1=0.22,
-            radius2=0.18,
-            depth=0.08,
-            matrix=Matrix.Translation((0.0, 0.0, 0.04)),
-        )
-        bmesh.ops.create_cone(
-            bm,
-            cap_ends=True,
-            cap_tris=True,
-            segments=6,
-            radius1=0.12,
-            radius2=0.02,
-            depth=0.45,
-            matrix=Matrix.Translation((0.0, 0.0, 0.30)),
+            radius1=0.14,
+            radius2=0.11,
+            depth=0.05,
+            matrix=Matrix.Translation((0.0, 0.0, 0.025)),
         )
 
     mesh = bpy.data.meshes.new(f"{node_name}_MESH")
@@ -881,6 +917,12 @@ def main():
     col_borders = get_or_create_collection("BORDERS_AND_RIVERS", col_world)
     col_caps = get_or_create_collection("CAPITALS", col_world)
 
+    # 1 material compartido por país (~21 materiales en lugar de ~400) usando Vertex Colors
+    country_materials = {
+        iso2: make_vertex_color_material(f"MAT_COUNTRY_{iso2}", roughness=0.88, specular=0.10)
+        for iso2 in sorted(target_iso2)
+    }
+
     mat_nat_cap = make_material(
         "MAT_CAP_NATIONAL",
         [255, 200, 55],
@@ -891,11 +933,11 @@ def main():
     )
     mat_prov_cap = make_material(
         "MAT_CAP_PROVINCIAL",
-        [210, 238, 255],
+        [205, 224, 240],
         color_scale=1.0,
-        roughness=0.35,
-        specular=0.4,
-        emission_strength=0.18,
+        roughness=0.45,
+        specular=0.25,
+        emission_strength=0.06,
     )
 
     provinces_records = []
@@ -927,22 +969,16 @@ def main():
         mesh_name = f"PROV_{iso2}_{idx:03d}_{prov_id}"
 
         base_rgb = countries_meta[iso2]["color"]
-        # Variación sutil estrictamente <= 1.0 para que ningún color claro se queme a blanco
         variation = 0.80 + ((idx % 5) * 0.045)
-        mat_prov = make_material(
-            f"MAT_{mesh_name}",
-            base_rgb,
-            color_scale=variation,
-            roughness=0.88,
-            specular=0.10,
-        )
+        prov_linear_rgba = srgb_to_linear_rgba(base_rgb, variation)
 
         built = build_province_mesh(
             mesh_name=mesh_name,
             rings_lon_lat=rings,
             simplify_tol=args.simplify_tol,
             base_extrude=args.extrude_height,
-            material=mat_prov,
+            shared_country_material=country_materials[iso2],
+            province_linear_rgba=prov_linear_rgba,
             collection=col_provs,
             extras={
                 "country_id": iso2,
@@ -972,12 +1008,10 @@ def main():
                 }
             )
 
-    # Construir océano batimétrico, cuadrícula cartográfica, bordes nítidos y ríos principales
     create_bathymetric_ocean_and_grid(land_points, col_world)
     build_borders_layers(border_segments, args.extrude_height, col_borders)
     build_rivers_layer(rivers_path, args.extrude_height, col_borders)
 
-    # Capitales nacionales y provinciales sobre la elevación real del terreno
     capitals_records = []
     cap_counters: dict[str, int] = {}
     for feat in cities_geo.get("features", []):
@@ -1041,7 +1075,7 @@ def main():
         export_extras=True,
         export_materials="EXPORT",
     )
-    print(f"[Blender] Exportado modelo 3D a {args.out_glb}")
+    print(f"[Blender] Exportado modelo 3D con {len(bpy.data.materials)} materiales a {args.out_glb}")
 
     write_provinces_lua(args.out_lua, provinces_records, capitals_records)
 

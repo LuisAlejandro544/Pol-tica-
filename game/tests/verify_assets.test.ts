@@ -90,6 +90,9 @@ test('GitHub Action de Blender es estrictamente manual (solo workflow_dispatch) 
   assert.ok(py.includes('BORDERS_PROVINCIAL'), 'Debe generar bordes provinciales');
   assert.ok(py.includes('MAT_OCEAN_BATHYMETRY'), 'Debe incluir batimetría oceánica');
   assert.ok(py.includes('elevation_at_lon_lat'), 'Debe esculpir relieve andino continuo');
+  assert.ok(py.includes('add_subdivided_draped_segment'), 'Debe subdividir ríos y fronteras sobre el relieve');
+  assert.ok(py.includes('f.smooth = f.normal.z > 0.35'), 'Debe suavizar caras superiores del terreno');
+  assert.ok(py.includes('MAT_COUNTRY_{iso2}'), 'Debe compartir materiales por país para reducir draw calls');
   assert.ok(py.includes('export_scene.gltf'), 'Debe exportar .glb desde Blender');
 
   const luaSync = fs.readFileSync(path.resolve('game/tools/blender/sync_lua_metadata.lua'), 'utf8');
