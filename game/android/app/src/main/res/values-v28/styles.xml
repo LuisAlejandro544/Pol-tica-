@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Propósito del archivo:
+  Configuración de muescas/cámaras (Display Cutout) para Android 9+ (API 28+).
+  Evita que la interfaz quede tapada por la cámara frontal o esquinas redondeadas.
+-->
+<resources>
+    <style name="HorizonteTheme" parent="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen">
+        <item name="android:windowFullscreen">true</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowActionBar">false</item>
+        <item name="android:windowBackground">@color/horizonte_bg_deep</item>
+        <item name="android:statusBarColor">@color/horizonte_bg_deep</item>
+        <item name="android:navigationBarColor">@color/horizonte_bg_deep</item>
+        <item name="android:windowLayoutInDisplayCutoutMode">never</item>
+    </style>
+</resources>

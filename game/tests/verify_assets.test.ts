@@ -171,3 +171,70 @@ test('Existen los 6 archivos de documentación en la raíz del proyecto', () => 
     assert.ok(fs.existsSync(path.resolve(doc)), `Falta ${doc} en la raíz`);
   }
 });
+
+test('Android oculta barras del sistema y desactiva edge-to-edge intrusivo en API 35 sin Kotlin', () => {
+  const manifest = fs.readFileSync(path.resolve('game/android/app/src/main/AndroidManifest.xml'), 'utf8');
+  const stylesBase = fs.readFileSync(path.resolve('game/android/app/src/main/res/values/styles.xml'), 'utf8');
+  const stylesV28 = fs.readFileSync(path.resolve('game/android/app/src/main/res/values-v28/styles.xml'), 'utf8');
+  const stylesV35 = fs.readFileSync(path.resolve('game/android/app/src/main/res/values-v35/styles.xml'), 'utf8');
+  const libRs = fs.readFileSync(path.resolve('game/src/lib.rs'), 'utf8');
+
+  assert.ok(manifest.includes('android:theme="@style/HorizonteTheme"'), 'AndroidManifest debe aplicar @style/HorizonteTheme');
+  assert.ok(stylesBase.includes('android:windowFullscreen">true'), 'Falta windowFullscreen=true');
+  assert.ok(stylesV28.includes('android:windowLayoutInDisplayCutoutMode">never'), 'Falta cutout mode seguro');
+  assert.ok(
+    stylesV35.includes('android:windowOptOutEdgeToEdgeEnforcement">true'),
+    'Falta windowOptOutEdgeToEdgeEnforcement=true para evitar que los 3 botones tapen la UI en Android 15',
+  );
+  assert.ok(libRs.includes('with_fullscreen(true)'), 'android_main debe activar viewport fullscreen');
+});
+
+test('UI móvil: scroll táctil habilitado, sin colisiones de ScrollArea ID y columnas verticales explícitas', () => {
+  const theme = fs.readFileSync(path.resolve('game/src/ui/theme.rs'), 'utf8');
+  assert.ok(theme.includes('selectable_labels = false'), 'Debe desactivar selectable_labels para permitir deslizar sobre textos');
+
+  const scrollFiles = [
+    'game/src/ui/components/chrome.rs',
+    'game/src/ui/screens/main_menu.rs',
+    'game/src/ui/screens/country_select.rs',
+    'game/src/ui/screens/map_screen.rs',
+    'game/src/ui/screens/economy_screen.rs',
+    'game/src/ui/screens/politics_screen.rs',
+    'game/src/ui/screens/diplomacy_screen.rs',
+    'game/src/ui/screens/military_screen.rs',
+    'game/src/ui/screens/settings_screen.rs',
+  ];
+
+  const seenSalts = new Set<string>();
+  for (const file of scrollFiles) {
+    const src = fs.readFileSync(path.resolve(file), 'utf8');
+    const scrollCount = (src.match(/ScrollArea::(vertical|horizontal)/g) || []).length;
+    const salts = [...src.matchAll(/\.id_salt\("([^"]+)"\)/g)].map((m) => m[1]);
+    assert.equal(
+      salts.length,
+      scrollCount,
+      `Cada ScrollArea en ${file} debe tener su propio .id_salt(...) para evitar "First use of ScrollArea ID"`,
+    );
+    for (const s of salts) {
+      assert.equal(seenSalts.has(s), false, `id_salt duplicado: ${s}`);
+      seenSalts.add(s);
+    }
+
+    // Comprobación básica de balanceo de llaves/paréntesis en archivos editados
+    let braces = 0;
+    let parens = 0;
+    for (const ch of src) {
+      if (ch === '{') braces++;
+      else if (ch === '}') braces--;
+      else if (ch === '(') parens++;
+      else if (ch === ')') parens--;
+    }
+    assert.equal(braces, 0, `Llaves desbalanceadas en ${file}`);
+    assert.equal(parens, 0, `Paréntesis desbalanceados en ${file}`);
+  }
+
+  const countrySelect = fs.readFileSync(path.resolve('game/src/ui/screens/country_select.rs'), 'utf8');
+  const mapScreen = fs.readFileSync(path.resolve('game/src/ui/screens/map_screen.rs'), 'utf8');
+  assert.ok(countrySelect.includes('Layout::top_down'), 'country_select debe usar Layout::top_down en sus columnas');
+  assert.ok(mapScreen.includes('Layout::top_down'), 'map_screen debe usar Layout::top_down en sus columnas');
+});

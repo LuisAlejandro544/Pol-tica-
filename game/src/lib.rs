@@ -26,6 +26,7 @@ pub extern "C" fn android_main(app: android_activity::AndroidApp) {
     let options = eframe::NativeOptions {
         android_app: Some(app),
         renderer: eframe::Renderer::Wgpu,
+        viewport: egui::ViewportBuilder::default().with_fullscreen(true),
         ..Default::default()
     };
 

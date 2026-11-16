@@ -204,8 +204,11 @@ impl eframe::App for HorizonteLatamApp {
             });
         }
 
-        // Contenido principal según la pantalla activa
-        egui::CentralPanel::default().show(ctx, |ui| {
+        // Contenido principal según la pantalla activa (con margen seguro táctil en bordes)
+        let central_frame = egui::Frame::central_panel(&ctx.style())
+            .fill(crate::ui::theme::BG_DEEP)
+            .inner_margin(egui::Margin::symmetric(14, 8));
+        egui::CentralPanel::default().frame(central_frame).show(ctx, |ui| {
             if let Some(err) = &self.last_error {
                 ui.colored_label(egui::Color32::RED, format!("Aviso del motor: {err}"));
             }

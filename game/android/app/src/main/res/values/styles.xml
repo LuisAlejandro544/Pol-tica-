@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Propósito del archivo:
+  Tema base de Android en pantalla completa para Horizonte Latam.
+  Oculta la barra de título y la barra de estado superior, y pinta las barras
+  del sistema con el mismo color de fondo oscuro (#0B1420) para evitar destellos.
+-->
+<resources>
+    <style name="HorizonteTheme" parent="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen">
+        <item name="android:windowFullscreen">true</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowActionBar">false</item>
+        <item name="android:windowBackground">@color/horizonte_bg_deep</item>
+        <item name="android:statusBarColor">@color/horizonte_bg_deep</item>
+        <item name="android:navigationBarColor">@color/horizonte_bg_deep</item>
+    </style>
+
+    <color name="horizonte_bg_deep">#0B1420</color>
+</resources>

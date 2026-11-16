@@ -11,6 +11,7 @@
 
     <application
         android:label="Horizonte Latam"
+        android:theme="@style/HorizonteTheme"
         android:hasCode="false"
         android:allowBackup="true"
         android:supportsRtl="true"
@@ -19,6 +20,7 @@
         <activity
             android:name="android.app.NativeActivity"
             android:label="Horizonte Latam"
+            android:theme="@style/HorizonteTheme"
             android:screenOrientation="sensorLandscape"
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|uiMode|density"
             android:launchMode="singleTask"

@@ -19,17 +19,21 @@ pub fn render_economy_screen(ui: &mut Ui, state: &mut GameState) {
         return;
     };
 
-    ui.label(
-        RichText::new(format!("MINISTERIO DE ECONOMÍA Y BANCO CENTRAL — {}", country.name))
-            .strong()
-            .size(18.0)
-            .color(ACCENT_GOLD),
-    );
-    ui.add_space(6.0);
+    egui::ScrollArea::vertical()
+        .id_salt("economy_screen_scroll")
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            ui.label(
+                RichText::new(format!("MINISTERIO DE ECONOMÍA Y BANCO CENTRAL — {}", country.name))
+                    .strong()
+                    .size(18.0)
+                    .color(ACCENT_GOLD),
+            );
+            ui.add_space(6.0);
 
-    ui.columns(2, |cols| {
-        // Columna izquierda: Indicadores de Moneda, PIB y Tesorería
-        cols[0].vertical(|ui| {
+            ui.columns(2, |cols| {
+                // Columna izquierda: Indicadores de Moneda, PIB y Tesorería
+                cols[0].vertical(|ui| {
             egui::Frame::new()
                 .fill(BG_PANEL)
                 .stroke(Stroke::new(1.5_f32, BORDER_BRASS))
@@ -146,6 +150,7 @@ pub fn render_economy_screen(ui: &mut Ui, state: &mut GameState) {
                         ui.add(egui::Slider::new(&mut country.economy.social_investment_pct, 0.5..=12.0).suffix("%"));
                     });
                 });
+            });
         });
-    });
+        });
 }

@@ -31,20 +31,30 @@ pub fn apply_tactical_theme(ctx: &egui::Context) {
     visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, BORDER_SUBTLE);
     visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0_f32, TEXT_PRIMARY);
 
-    visuals.widgets.inactive.bg_fill = Color32::from_rgb(33, 53, 78);
+    visuals.widgets.inactive.bg_fill = Color32::from_rgb(30, 50, 74);
     visuals.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, BORDER_SUBTLE);
-    visuals.widgets.inactive.corner_radius = CornerRadius::same(6);
+    visuals.widgets.inactive.corner_radius = CornerRadius::same(7);
+    visuals.widgets.inactive.fg_stroke = Stroke::new(1.0_f32, TEXT_PRIMARY);
 
-    visuals.widgets.hovered.bg_fill = Color32::from_rgb(45, 73, 107);
+    visuals.widgets.hovered.bg_fill = Color32::from_rgb(44, 72, 106);
     visuals.widgets.hovered.bg_stroke = Stroke::new(1.5_f32, ACCENT_GOLD);
+    visuals.widgets.hovered.corner_radius = CornerRadius::same(7);
 
-    visuals.widgets.active.bg_fill = Color32::from_rgb(58, 92, 132);
+    visuals.widgets.active.bg_fill = Color32::from_rgb(56, 90, 130);
     visuals.widgets.active.bg_stroke = Stroke::new(1.5_f32, ACCENT_GOLD);
+    visuals.widgets.active.corner_radius = CornerRadius::same(7);
+
+    visuals.selection.bg_fill = Color32::from_rgb(24, 96, 138);
+    visuals.selection.stroke = Stroke::new(1.5_f32, ACCENT_CYAN);
 
     style.visuals = visuals;
-    style.spacing.item_spacing = egui::vec2(10.0, 8.0);
-    style.spacing.button_padding = egui::vec2(14.0, 10.0); // Tamaño cómodo para dedos en móvil
-    style.spacing.window_margin = Margin::same(14);
+    // Crítico en móvil: evita que arrastrar el dedo sobre textos seleccione texto en lugar de hacer scroll
+    style.interaction.selectable_labels = false;
+    style.spacing.item_spacing = egui::vec2(8.0, 8.0);
+    style.spacing.button_padding = egui::vec2(14.0, 9.0);
+    style.spacing.window_margin = Margin::same(12);
+    style.spacing.scroll.bar_width = 8.0;
+    style.spacing.scroll.handle_min_length = 28.0;
     ctx.set_style(style);
 }
 
