@@ -1,8 +1,9 @@
 // Propósito del archivo:
 // Script de compilación Gradle del módulo `:app` para generar el APK distribuible
-// en tiendas de terceros (como Uptodown). Integra `cargo ndk` obligatoriamente para
-// compilar el motor Rust + Lua 5.4 en arquitecturas de 32 bits (armeabi-v7a) y
-// 64 bits (arm64-v8a, x86_64) sin usar código Kotlin.
+// en tiendas de terceros (como Uptodown) o compilaciones Debug por arquitectura.
+// Integra `cargo ndk` obligatoriamente para compilar Rust + Lua 5.4 + wgpu sin Kotlin,
+// permitiendo filtrar una ABI concreta mediante `-PrustAbi=arm64-v8a` o `armeabi-v7a`
+// y elegir perfil con `-PrustProfile=debug|release`.
 
 plugins {
     id("com.android.application") version "8.7.3"
@@ -11,19 +12,41 @@ plugins {
 val cargoProjectDir = file("../..")
 val jniLibsDir = file("src/main/jniLibs")
 
+val requestedAbi = (project.findProperty("rustAbi") as String?)?.trim()?.takeIf { it.isNotEmpty() }
+val requestedProfile = ((project.findProperty("rustProfile") as String?)?.trim()?.lowercase())
+    ?: if (gradle.startParameter.taskNames.any { it.contains("Debug", ignoreCase = true) }) "debug" else "release"
+
+val targetAbis = if (requestedAbi != null) {
+    listOf(requestedAbi)
+} else {
+    listOf("armeabi-v7a", "arm64-v8a", "x86_64")
+}
+
 val buildRustAndroid by tasks.registering(Exec::class) {
     group = "rust"
-    description = "Compila la librería nativa Rust + Lua 5.4 para 32-bit y 64-bit vía cargo-ndk"
+    description = "Compila la librería nativa Rust + Lua 5.4 vía cargo-ndk para: ${targetAbis.joinToString(", ")} ($requestedProfile)"
     workingDir = cargoProjectDir
-    commandLine(
-        "cargo", "ndk",
-        "-t", "armeabi-v7a",
-        "-t", "arm64-v8a",
-        "-t", "x86_64",
-        "-p", "24",
-        "-o", jniLibsDir.absolutePath,
-        "build", "--release"
-    )
+
+    doFirst {
+        if (requestedAbi != null && jniLibsDir.exists()) {
+            jniLibsDir.listFiles()?.forEach { abiDir ->
+                if (abiDir.isDirectory && abiDir.name != requestedAbi) {
+                    abiDir.deleteRecursively()
+                }
+            }
+        }
+    }
+
+    val cmd = mutableListOf("cargo", "ndk")
+    for (abi in targetAbis) {
+        cmd.add("-t")
+        cmd.add(abi)
+    }
+    cmd.addAll(listOf("-p", "24", "-o", jniLibsDir.absolutePath, "build"))
+    if (requestedProfile == "release") {
+        cmd.add("--release")
+    }
+    commandLine(cmd)
 }
 
 android {
@@ -39,7 +62,8 @@ android {
         versionName = "0.1.0"
 
         ndk {
-            abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86_64")
+            abiFilters.clear()
+            abiFilters += targetAbis
         }
     }
 

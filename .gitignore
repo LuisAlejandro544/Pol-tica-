@@ -6,3 +6,9 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Assets 3D pesados generados por Blender (se distribuyen por GitHub Releases)
+maps/latinoamerica_3d.glb
+scripts/provinces_latam.lua
+game/assets/maps/latinoamerica_3d.glb
+game/assets/scripts/provinces_latam.lua

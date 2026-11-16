@@ -1,16 +1,20 @@
 //! Propósito del archivo:
 //! Coordinador raíz de la interfaz móvil en Rust (`HorizonteLatamApp`).
-//! Conecta `eframe::App` con el `SimulationWorker` en segundo plano mediante
-//! canales sin bloqueo (`crossbeam_channel`), gestiona la navegación multipantalla,
-//! los popups de eventos Lua 5.4 y el temporizador automático de turnos según velocidad.
+//! Conecta `eframe::App` (`wgpu`) con el `SimulationWorker` en segundo plano mediante
+//! canales sin bloqueo (`crossbeam_channel`), carga el modelo 3D (`latinoamerica_3d.glb`)
+//! y el catálogo provincial Lua 5.4 (`provinces_latam.lua`), y gestiona la navegación
+//! multipantalla y los popups de eventos.
 
 pub mod components;
 pub mod screens;
 pub mod theme;
 
 use crate::engine::{SimResponse, SimulationWorker};
-use crate::map::LatamVectorMap;
-use crate::models::{Difficulty, GameState, MapMode, ScreenRoute};
+use crate::lua_bridge::LuaEngine;
+use crate::map::{Latam3dScene, LatamVectorMap};
+use crate::models::{
+    CapitalMarkerData, Difficulty, GameState, MapMode, ProvinceData, ScreenRoute,
+};
 use crate::ui::components::chrome::{
     render_bottom_nav, render_event_popup, render_top_hud, TopBarAction,
 };
@@ -24,11 +28,16 @@ use crate::ui::screens::military_screen::render_military_screen;
 use crate::ui::screens::politics_screen::render_politics_screen;
 use crate::ui::screens::settings_screen::{render_settings_screen, SettingsAction};
 use crate::ui::theme::apply_tactical_theme;
+use eframe::egui_wgpu::wgpu;
 use std::collections::BTreeMap;
 use std::time::Instant;
 
 pub struct HorizonteLatamApp {
     pub route: ScreenRoute,
+    pub scene_3d: Option<Latam3dScene>,
+    pub target_format: wgpu::TextureFormat,
+    pub provinces_catalog: BTreeMap<String, ProvinceData>,
+    pub capitals_catalog: Vec<CapitalMarkerData>,
     pub vector_map: LatamVectorMap,
     pub state: GameState,
     pub worker: SimulationWorker,
@@ -42,9 +51,33 @@ pub struct HorizonteLatamApp {
 }
 
 impl HorizonteLatamApp {
-    pub fn new() -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        let target_format = cc
+            .wgpu_render_state
+            .as_ref()
+            .map(|rs| rs.target_format)
+            .unwrap_or(wgpu::TextureFormat::Bgra8UnormSrgb);
+
         let vector_map = LatamVectorMap::load_embedded()
             .expect("No se pudo cargar assets/maps/latinoamerica.svg");
+
+        let mut startup_err = None;
+        let scene_3d = match Latam3dScene::load_embedded_or_disk() {
+            Ok(scene) => scene,
+            Err(err) => {
+                log::warn!("No se pudo inicializar el mapa 3D GLB, usando respaldo SVG: {err}");
+                startup_err = Some(err);
+                None
+            }
+        };
+
+        let (provinces_catalog, capitals_catalog) = LuaEngine::new()
+            .and_then(|lua| lua.load_provinces_and_capitals())
+            .unwrap_or_else(|err| {
+                log::warn!("No se pudo cargar provinces_latam.lua: {err}");
+                (BTreeMap::new(), Vec::new())
+            });
+
         let mut worker = SimulationWorker::spawn();
         worker.request_new_campaign(Difficulty::Normal);
 
@@ -57,6 +90,7 @@ impl HorizonteLatamApp {
             difficulty: Difficulty::Normal,
             player_country_id: None,
             selected_country_id: Some("MX".to_string()),
+            selected_province_mesh: None,
             countries: BTreeMap::new(),
             relations: BTreeMap::new(),
             active_event: None,
@@ -65,6 +99,10 @@ impl HorizonteLatamApp {
 
         Self {
             route: ScreenRoute::MainMenu,
+            scene_3d,
+            target_format,
+            provinces_catalog,
+            capitals_catalog,
             vector_map,
             state: placeholder_state,
             worker,
@@ -73,7 +111,7 @@ impl HorizonteLatamApp {
             selected_difficulty: Difficulty::Normal,
             show_country_popup: false,
             last_tick_instant: Instant::now(),
-            last_error: None,
+            last_error: startup_err,
             theme_initialized: false,
         }
     }
@@ -91,9 +129,13 @@ impl HorizonteLatamApp {
                 }
                 SimResponse::TurnCompleted(updated) => {
                     let prev_selected = self.state.selected_country_id.clone();
+                    let prev_prov = self.state.selected_province_mesh.clone();
                     self.state = *updated;
                     if self.state.selected_country_id.is_none() {
                         self.state.selected_country_id = prev_selected;
+                    }
+                    if self.state.selected_province_mesh.is_none() {
+                        self.state.selected_province_mesh = prev_prov;
                     }
                 }
                 SimResponse::Error(err) => {
@@ -193,6 +235,8 @@ impl eframe::App for HorizonteLatamApp {
                 ScreenRoute::CountrySelect => {
                     match render_country_select(
                         ui,
+                        self.scene_3d.as_ref(),
+                        self.target_format,
                         &self.vector_map,
                         &mut self.state,
                         &mut self.map_viewport,
@@ -208,6 +252,11 @@ impl eframe::App for HorizonteLatamApp {
                                 .get(&country_id)
                                 .map(|c| c.name.clone())
                                 .unwrap_or_else(|| country_id.clone());
+                            if let Some(scene) = &self.scene_3d {
+                                if let Some(center) = scene.country_center(&country_id) {
+                                    self.map_viewport.camera_3d.focus_point(center, 28.0);
+                                }
+                            }
                             self.state.player_country_id = Some(country_id.clone());
                             self.state.selected_country_id = Some(country_id.clone());
                             self.state.push_chronicle(
@@ -221,7 +270,10 @@ impl eframe::App for HorizonteLatamApp {
                 ScreenRoute::WorldMap => {
                     let res = render_map_screen(
                         ui,
+                        self.scene_3d.as_ref(),
+                        self.target_format,
                         &self.vector_map,
+                        &self.provinces_catalog,
                         &mut self.state,
                         &mut self.map_mode,
                         &mut self.map_viewport,

@@ -164,6 +164,29 @@ pub struct GameEvent {
     pub options: Vec<EventOption>,
 }
 
+/// Metadatos de una provincia del modelo 3D (`provinces_latam.lua` + `latinoamerica_3d.glb`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProvinceData {
+    pub id: String,
+    pub mesh_name: String,
+    pub country_id: String,
+    pub name: String,
+    pub admin_type: String,
+    pub terrain_type: String,
+    pub elevation_avg: f64,
+    pub area_weight: f64,
+}
+
+/// Marcador de capital nacional o provincial generado por Blender (`CAP_*` / `PCAP_*`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CapitalMarkerData {
+    pub node_name: String,
+    pub country_id: String,
+    pub name: String,
+    pub is_national: bool,
+    pub pop_max: u64,
+}
+
 /// Registro reciente de acciones tomadas por la IA local o el jugador.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChronicleEntry {
@@ -184,6 +207,7 @@ pub struct GameState {
     pub difficulty: Difficulty,
     pub player_country_id: Option<String>,
     pub selected_country_id: Option<String>,
+    pub selected_province_mesh: Option<String>,
     pub countries: BTreeMap<String, CountryState>,
     pub relations: BTreeMap<(String, String), DiplomaticRelation>,
     pub active_event: Option<GameEvent>,

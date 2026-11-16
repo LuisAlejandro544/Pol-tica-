@@ -1,13 +1,14 @@
 //! Propósito del archivo:
 //! Puente seguro entre Rust y Lua 5.4 (`mlua` con Lua 5.4 compilado estáticamente).
-//! Carga los países iniciales desde `scripts/countries_latam.lua`, ejecuta las fórmulas
-//! mensuales de `scripts/game_rules.lua` y genera eventos desde `scripts/events_latam.lua`.
+//! Carga los países iniciales desde `scripts/countries_latam.lua`, las provincias y
+//! capitales desde `scripts/provinces_latam.lua`, ejecuta las fórmulas mensuales de
+//! `scripts/game_rules.lua` y genera eventos desde `scripts/events_latam.lua`.
 //! Vive en el hilo secundario de simulación para nunca bloquear el renderizado de la UI.
 
 use crate::map::svg_loader::ASSETS_DIR;
 use crate::models::{
-    AiPersonality, CountryState, EconomyState, EventOption, GameEvent, MilitaryState,
-    PoliticalParty,
+    AiPersonality, CapitalMarkerData, CountryState, EconomyState, EventOption, GameEvent,
+    MilitaryState, PoliticalParty, ProvinceData,
 };
 use mlua::{Function, Lua, Table};
 use std::collections::BTreeMap;
@@ -37,6 +38,20 @@ impl LuaEngine {
             .get_file(path)
             .and_then(|f| f.contents_utf8())
             .ok_or_else(|| LuaBridgeError::MissingScript(path.to_string()))
+    }
+
+    fn read_optional_script_owned(asset_path: &str, disk_fallbacks: &[&str]) -> Option<String> {
+        if let Some(text) = ASSETS_DIR.get_file(asset_path).and_then(|f| f.contents_utf8()) {
+            return Some(text.to_string());
+        }
+        #[cfg(not(target_os = "android"))]
+        for path in disk_fallbacks {
+            if let Ok(text) = std::fs::read_to_string(path) {
+                return Some(text);
+            }
+        }
+        let _ = disk_fallbacks;
+        None
     }
 
     /// Carga los 21 países latinoamericanos definidos en `scripts/countries_latam.lua`.
@@ -121,6 +136,61 @@ impl LuaEngine {
         }
 
         Ok(countries)
+    }
+
+    /// Carga el catálogo de provincias y capitales generado por Blender desde `scripts/provinces_latam.lua`.
+    /// Si el archivo aún no existe, devuelve colecciones vacías para mantener compatibilidad.
+    pub fn load_provinces_and_capitals(
+        &self,
+    ) -> Result<(BTreeMap<String, ProvinceData>, Vec<CapitalMarkerData>), LuaBridgeError> {
+        let Some(src) = Self::read_optional_script_owned(
+            "scripts/provinces_latam.lua",
+            &[
+                "scripts/provinces_latam.lua",
+                "../scripts/provinces_latam.lua",
+                "game/assets/scripts/provinces_latam.lua",
+            ],
+        ) else {
+            return Ok((BTreeMap::new(), Vec::new()));
+        };
+
+        let root: Table = self.lua.load(&src).eval()?;
+        let mut provinces = BTreeMap::new();
+        if let Ok(prov_tbl) = root.get::<Table>("provinces") {
+            for item in prov_tbl.sequence_values::<Table>() {
+                let pt = item?;
+                let mesh_name: String = pt.get("mesh_name")?;
+                provinces.insert(
+                    mesh_name.clone(),
+                    ProvinceData {
+                        id: pt.get("id")?,
+                        mesh_name,
+                        country_id: pt.get("country_id")?,
+                        name: pt.get("name")?,
+                        admin_type: pt.get("admin_type")?,
+                        terrain_type: pt.get("terrain_type")?,
+                        elevation_avg: pt.get("elevation_avg")?,
+                        area_weight: pt.get("area_weight")?,
+                    },
+                );
+            }
+        }
+
+        let mut capitals = Vec::new();
+        if let Ok(cap_tbl) = root.get::<Table>("capitals") {
+            for item in cap_tbl.sequence_values::<Table>() {
+                let ct = item?;
+                capitals.push(CapitalMarkerData {
+                    node_name: ct.get("node_name")?,
+                    country_id: ct.get("country_id")?,
+                    name: ct.get("name")?,
+                    is_national: ct.get("is_national")?,
+                    pop_max: ct.get("pop_max")?,
+                });
+            }
+        }
+
+        Ok((provinces, capitals))
     }
 
     /// Ejecuta un paso económico y político mensual para un país usando `scripts/game_rules.lua`.

@@ -131,6 +131,7 @@ fn build_initial_state(lua: &LuaEngine, difficulty: Difficulty) -> Result<GameSt
         difficulty,
         player_country_id: None,
         selected_country_id: Some("MX".to_string()),
+        selected_province_mesh: None,
         countries,
         relations,
         active_event: None,

@@ -9,7 +9,8 @@ Descripción exacta de carpetas y responsabilidades de cada módulo en el reposi
 ```text
 /
 ├── .github/workflows/
-│   └── build_blender_latam_map.yml   # GitHub Action SOLO MANUAL para generar mapa 3D (.glb) y provincias (.lua)
+│   ├── android_apk.yml               # GitHub Action SOLO MANUAL para compilar APKs Debug (64-bit y 32-bit) desde Releases
+│   └── build_blender_latam_map.yml   # GitHub Action SOLO MANUAL para generar mapa 3D (.glb), provincias (.lua) y Release opcional
 ├── src/
 │   ├── App.tsx                       # Host web mínimo "Hello World" para compilación en entorno AI Studio
 │   ├── index.css                     # Estilos base Tailwind del host web
@@ -45,7 +46,9 @@ Descripción exacta de carpetas y responsabilidades de cada módulo en el reposi
 │       ├── models/mod.rs             # Structs y enums (CountryState, EconomyState, PoliticalParty, GameState)
 │       ├── map/
 │       │   ├── mod.rs
-│       │   └── svg_loader.rs         # Lector SVG + teselación lyon + hit-test táctil
+│       │   ├── glb_loader.rs         # Lector glTF/GLB (`latinoamerica_3d.glb`) + raycasting 3D de provincias
+│       │   ├── renderer_3d.rs        # Renderizador 3D `wgpu` + `egui-wgpu` en un solo draw call con iluminación
+│       │   └── svg_loader.rs         # Lector SVG + teselación lyon (respaldo 2D) + incrustación `assets`
 │       ├── lua_bridge/mod.rs         # VM Lua 5.4 (mlua) para datos, turnos y eventos
 │       ├── ai/mod.rs                 # IA local paralela en Rust (rayon) con personalidades y elecciones
 │       ├── engine/mod.rs             # Hilo secundario SimulationWorker (crossbeam-channel)

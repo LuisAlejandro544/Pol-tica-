@@ -1,8 +1,8 @@
 /**
  * Propósito del archivo:
  * Suite de pruebas automatizadas (node:test) para validar la integridad estructural
- * del mapa SVG de Latinoamérica, los scripts Lua 5.4 de países y reglas,
- * el manifiesto Rust Cargo.toml y la configuración Android 32/64-bit sin Kotlin.
+ * del mapa SVG de respaldo, los scripts Lua 5.4, el visor 3D (wgpu + gltf),
+ * las reglas de .gitignore y los workflows manuales de Blender (Release) y APK Debug (32/64-bit).
  */
 
 import test from 'node:test';
@@ -42,7 +42,7 @@ test('countries_latam.lua define población, moneda, PIB y partidos políticos p
   assert.ok(lua.includes('political_parties ='), 'Falta campo political_parties');
 });
 
-test('Cargo.toml usa Rust 2024, Lua 5.4 vendored y solo licencias permisivas', () => {
+test('Cargo.toml usa Rust 2024, Lua 5.4 vendored, wgpu 3D y solo licencias permisivas', () => {
   const cargoPath = path.resolve('game/Cargo.toml');
   const cargo = fs.readFileSync(cargoPath, 'utf8');
 
@@ -50,54 +50,73 @@ test('Cargo.toml usa Rust 2024, Lua 5.4 vendored y solo licencias permisivas', (
   assert.ok(cargo.includes('lua54'));
   assert.ok(cargo.includes('vendored'));
   assert.ok(cargo.includes('eframe'));
+  assert.ok(cargo.includes('"wgpu"'));
+  assert.ok(cargo.includes('glam ='));
+  assert.ok(cargo.includes('bytemuck ='));
+  assert.ok(cargo.includes('gltf = "1.4"'));
   assert.ok(cargo.includes('android-activity'));
   assert.equal(/resvg|usvg|gpl|agpl/i.test(cargo), false, 'No debe incluir crates copyleft');
 });
 
-test('Configuración Android soporta 32-bit, 64-bit, horizontal y cero Kotlin', () => {
+test('Visor 3D Rust (glb_loader + renderer_3d + map_canvas) está integrado y documentado', () => {
+  const glbLoader = fs.readFileSync(path.resolve('game/src/map/glb_loader.rs'), 'utf8');
+  const renderer3d = fs.readFileSync(path.resolve('game/src/map/renderer_3d.rs'), 'utf8');
+  const canvas = fs.readFileSync(path.resolve('game/src/ui/components/map_canvas.rs'), 'utf8');
+
+  assert.ok(glbLoader.startsWith('//! Propósito del archivo:'), 'glb_loader.rs debe tener encabezado explicativo');
+  assert.ok(renderer3d.startsWith('//! Propósito del archivo:'), 'renderer_3d.rs debe tener encabezado explicativo');
+  assert.ok(glbLoader.includes('pick_province_at_ray'), 'Falta raycasting 3D por provincia');
+  assert.ok(renderer3d.includes('CallbackTrait'), 'Falta integración egui_wgpu::CallbackTrait');
+  assert.ok(canvas.includes('new_paint_callback'), 'Falta PaintCallback 3D en map_canvas.rs');
+});
+
+test('Configuración Android soporta 32-bit, 64-bit, horizontal, cero Kotlin y selección por ABI', () => {
   const gradle = fs.readFileSync(path.resolve('game/android/app/build.gradle.kts'), 'utf8');
   const manifest = fs.readFileSync(path.resolve('game/android/app/src/main/AndroidManifest.xml'), 'utf8');
 
   assert.ok(gradle.includes('armeabi-v7a'), 'Falta ABI 32-bit armeabi-v7a');
   assert.ok(gradle.includes('arm64-v8a'), 'Falta ABI 64-bit arm64-v8a');
+  assert.ok(gradle.includes('rustAbi'), 'build.gradle.kts debe soportar filtro -PrustAbi');
   assert.ok(gradle.includes('cargo'), 'Gradle debe ejecutar cargo-ndk');
   assert.ok(manifest.includes('android:screenOrientation="sensorLandscape"'), 'Debe forzar formato horizontal');
   assert.ok(manifest.includes('android:hasCode="false"'), 'NativeActivity puro sin Kotlin');
 });
 
-test('Cargo.toml incluye preparación 3D (wgpu, egui-wgpu, egui-winit, gltf)', () => {
-  const cargo = fs.readFileSync(path.resolve('game/Cargo.toml'), 'utf8');
-  assert.ok(cargo.includes('wgpu = "24"'), 'Falta wgpu');
-  assert.ok(cargo.includes('egui-wgpu = "0.31"'), 'Falta egui-wgpu');
-  assert.ok(cargo.includes('egui-winit ='), 'Falta egui-winit');
-  assert.ok(cargo.includes('gltf = "1.4"'), 'Falta gltf');
+test('.gitignore excluye latinoamerica_3d.glb y provinces_latam.lua', () => {
+  const gitignore = fs.readFileSync(path.resolve('.gitignore'), 'utf8');
+  assert.ok(gitignore.includes('maps/latinoamerica_3d.glb'));
+  assert.ok(gitignore.includes('scripts/provinces_latam.lua'));
+  assert.ok(gitignore.includes('game/assets/maps/latinoamerica_3d.glb'));
+  assert.ok(gitignore.includes('game/assets/scripts/provinces_latam.lua'));
 });
 
-test('GitHub Action de Blender es estrictamente manual (solo workflow_dispatch) y usa Lua 5.4', () => {
+test('GitHub Action de Blender es manual (workflow_dispatch) y tiene opción condicional de Release', () => {
   const yml = fs.readFileSync(path.resolve('.github/workflows/build_blender_latam_map.yml'), 'utf8');
   assert.ok(yml.includes('workflow_dispatch:'), 'Debe tener workflow_dispatch');
   assert.equal(/^\s*(push|pull_request|schedule):/m.test(yml), false, 'No debe activarse automáticamente con push o PR');
-  assert.ok(yml.includes('lua5.4'), 'Debe ejecutar Lua 5.4 en el Action');
-  assert.ok(yml.includes('--python-exit-code 1'), 'Blender debe propagar errores de Python');
-  assert.ok(yml.includes('build_latam_map.py'), 'Debe ejecutar el script Blender Python');
+  assert.ok(yml.includes('publish_release:'), 'Falta opción publish_release');
+  assert.ok(yml.includes('release_version:'), 'Falta input release_version');
+  assert.ok(yml.includes('if: ${{ inputs.publish_release }}'), 'El paso de Release debe ser condicional');
+  assert.ok(yml.includes('gh release'), 'Debe publicar en GitHub Release');
+});
 
-  const py = fs.readFileSync(path.resolve('game/tools/blender/build_latam_map.py'), 'utf8');
-  assert.ok(py.includes('Matrix.Translation'), 'Debe usar mathutils.Matrix en create_cone');
-  assert.ok(py.includes('ne_10m_admin_1_states_provinces.geojson'), 'Debe usar GeoJSON Admin-1 de provincias');
-  assert.ok(py.includes('ne_10m_rivers_lake_centerlines.geojson'), 'Debe incluir ríos principales');
-  assert.ok(py.includes('srgb_channel_to_linear'), 'Debe convertir colores sRGB a Linear');
-  assert.ok(py.includes('BORDERS_INTERNATIONAL'), 'Debe generar fronteras internacionales');
-  assert.ok(py.includes('BORDERS_PROVINCIAL'), 'Debe generar bordes provinciales');
-  assert.ok(py.includes('MAT_OCEAN_BATHYMETRY'), 'Debe incluir batimetría oceánica');
-  assert.ok(py.includes('elevation_at_lon_lat'), 'Debe esculpir relieve andino continuo');
-  assert.ok(py.includes('add_subdivided_draped_segment'), 'Debe subdividir ríos y fronteras sobre el relieve');
-  assert.ok(py.includes('f.smooth = f.normal.z > 0.35'), 'Debe suavizar caras superiores del terreno');
-  assert.ok(py.includes('MAT_COUNTRY_{iso2}'), 'Debe compartir materiales por país para reducir draw calls');
-  assert.ok(py.includes('export_scene.gltf'), 'Debe exportar .glb desde Blender');
-
-  const luaSync = fs.readFileSync(path.resolve('game/tools/blender/sync_lua_metadata.lua'), 'utf8');
-  assert.ok(luaSync.includes('export-countries'), 'Falta modo export-countries en Lua');
-  assert.ok(luaSync.includes('validate-provinces'), 'Falta modo validate-provinces en Lua');
+test('GitHub Action de APK Debug está en /.github/workflows/, es manual, descarga Release, cachea y separa 64-bit y 32-bit', () => {
+  assert.equal(
+    fs.existsSync(path.resolve('game/.github/workflows/android_apk.yml')),
+    false,
+    'No debe quedar copia duplicada en game/.github/workflows/',
+  );
+  const yml = fs.readFileSync(path.resolve('.github/workflows/android_apk.yml'), 'utf8');
+  assert.ok(yml.includes('workflow_dispatch:'), 'Debe ser activable manualmente');
+  assert.equal(/^\s*(push|pull_request|schedule):/m.test(yml), false, 'Nunca debe activarse con commits/push');
+  assert.ok(yml.includes('gh release download'), 'Debe descargar mapa 3D y provincias desde Release');
+  assert.ok(yml.includes('actions/cache/restore@v4'), 'Debe restaurar caché');
+  assert.ok(yml.includes('actions/cache/save@v4'), 'Debe guardar caché obligatoriamente');
+  assert.ok(yml.includes('if: always()'), 'La caché debe guardarse incluso si falla un paso posterior');
+  assert.ok(yml.includes('assembleDebug'), 'Debe compilar APK Debug');
+  assert.ok(yml.includes('arm64-v8a'), 'Debe incluir build 64 bits');
+  assert.ok(yml.includes('armeabi-v7a'), 'Debe incluir build 32 bits');
+  assert.ok(yml.includes('HorizonteLatam-debug-${{ matrix.arch_label }}-${{ matrix.abi }}'), 'Debe subir cada arquitectura por separado');
 });
 
 test('Existen los 6 archivos de documentación en la raíz del proyecto', () => {

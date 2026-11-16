@@ -5,9 +5,10 @@
 //! - Derecha: Ficha detallada de la nación seleccionada (Población, Moneda, PIB, Partidos Políticos)
 //!   y botón principal para asumir el liderazgo e iniciar la partida.
 
-use crate::map::LatamVectorMap;
+use crate::map::{Latam3dScene, LatamVectorMap};
 use crate::models::{GameState, MapMode};
 use crate::ui::components::map_canvas::{render_latam_map, MapViewportState};
+use eframe::egui_wgpu::wgpu;
 use crate::ui::theme::{
     country_base_color, format_population, format_usd_millions, ideology_color, ACCENT_CYAN,
     ACCENT_EMERALD, ACCENT_GOLD, BG_CARD, BG_PANEL, BORDER_BRASS, BORDER_SUBTLE, TEXT_MUTED,
@@ -23,6 +24,8 @@ pub enum CountrySelectAction {
 
 pub fn render_country_select(
     ui: &mut Ui,
+    scene_3d: Option<&Latam3dScene>,
+    target_format: wgpu::TextureFormat,
     vector_map: &LatamVectorMap,
     state: &mut GameState,
     viewport: &mut MapViewportState,
@@ -47,7 +50,7 @@ pub fn render_country_select(
                         .color(ACCENT_GOLD),
                 );
                 ui.label(
-                    RichText::new("Toca un país en el mapa SVG o en el listado para revisar su dossier")
+                    RichText::new("Toca un país en el mapa 3D o en el listado para revisar su dossier")
                         .size(13.0)
                         .color(TEXT_MUTED),
                 );
@@ -82,22 +85,35 @@ pub fn render_country_select(
                                 .circle_filled(dot_rect.center(), 5.0, country_base_color(country));
                             if ui.selectable_label(is_sel, &country.name).clicked() {
                                 state.selected_country_id = Some(id.clone());
+                                state.selected_province_mesh = None;
+                                if let Some(scene) = scene_3d {
+                                    if let Some(center) = scene.country_center(id) {
+                                        viewport.camera_3d.focus_point(center, 30.0);
+                                    }
+                                }
                             }
                         });
                     }
                 });
             });
 
-        // 2. Mapa interactivo SVG central
+        // 2. Visor interactivo 3D (o respaldo SVG)
         let map_w = (avail.x - 185.0 - 380.0 - 28.0).max(260.0);
         ui.allocate_ui_with_layout(
             egui::vec2(map_w, avail.y - 4.0),
             egui::Layout::top_down(egui::Align::Min),
             |ui| {
-                if let Some(hit_id) =
-                    render_latam_map(ui, vector_map, state, MapMode::Political, viewport)
-                {
-                    state.selected_country_id = Some(hit_id);
+                if let Some(hit) = render_latam_map(
+                    ui,
+                    scene_3d,
+                    target_format,
+                    vector_map,
+                    state,
+                    MapMode::Political,
+                    viewport,
+                ) {
+                    state.selected_country_id = Some(hit.country_id);
+                    state.selected_province_mesh = hit.province_mesh;
                 }
             },
         );

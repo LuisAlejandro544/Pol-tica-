@@ -4,14 +4,16 @@
 //! la crónica regional de decisiones de la IA local, y abre un popup emergente
 //! (`Popup País`) al tocar una nación extranjera sin saturar la pantalla principal.
 
-use crate::map::LatamVectorMap;
-use crate::models::{GameState, MapMode, ScreenRoute};
+use crate::map::{Latam3dScene, LatamVectorMap};
+use crate::models::{GameState, MapMode, ProvinceData, ScreenRoute};
 use crate::ui::components::map_canvas::{render_latam_map, MapViewportState};
 use crate::ui::theme::{
     format_population, format_usd_millions, ACCENT_CRIMSON, ACCENT_CYAN, ACCENT_EMERALD,
     ACCENT_GOLD, BG_CARD, BG_PANEL, BORDER_BRASS, BORDER_SUBTLE, TEXT_MUTED, TEXT_PRIMARY,
 };
+use eframe::egui_wgpu::wgpu;
 use egui::{RichText, Stroke, Ui};
+use std::collections::BTreeMap;
 
 pub struct MapScreenResult {
     pub open_diplomacy_with: Option<String>,
@@ -19,7 +21,10 @@ pub struct MapScreenResult {
 
 pub fn render_map_screen(
     ui: &mut Ui,
+    scene_3d: Option<&Latam3dScene>,
+    target_format: wgpu::TextureFormat,
     vector_map: &LatamVectorMap,
+    provinces_catalog: &BTreeMap<String, ProvinceData>,
     state: &mut GameState,
     map_mode: &mut MapMode,
     viewport: &mut MapViewportState,
@@ -82,14 +87,23 @@ pub fn render_map_screen(
                 });
             });
 
-        // Área derecha: Mapa SVG interactivo de Latinoamérica
+        // Área derecha: Visor 3D interactivo de Latinoamérica
         let map_w = (avail.x - 260.0).max(320.0);
         ui.allocate_ui_with_layout(
             egui::vec2(map_w, avail.y - 4.0),
             egui::Layout::top_down(egui::Align::Min),
             |ui| {
-                if let Some(hit_id) = render_latam_map(ui, vector_map, state, *map_mode, viewport) {
-                    state.selected_country_id = Some(hit_id);
+                if let Some(hit) = render_latam_map(
+                    ui,
+                    scene_3d,
+                    target_format,
+                    vector_map,
+                    state,
+                    *map_mode,
+                    viewport,
+                ) {
+                    state.selected_country_id = Some(hit.country_id);
+                    state.selected_province_mesh = hit.province_mesh;
                     *show_country_popup = true;
                 }
             },
@@ -115,6 +129,32 @@ pub fn render_map_screen(
                     )
                     .show(ui.ctx(), |ui| {
                         ui.label(RichText::new(format!("Capital: {}", country.capital)).color(TEXT_MUTED));
+                        if let Some(prov_mesh) = &state.selected_province_mesh {
+                            if let Some(prov) = provinces_catalog.get(prov_mesh) {
+                                if prov.country_id == country.id {
+                                    ui.add_space(4.0);
+                                    egui::Frame::new()
+                                        .fill(BG_CARD)
+                                        .corner_radius(5.0)
+                                        .inner_margin(6.0)
+                                        .show(ui, |ui| {
+                                            ui.label(
+                                                RichText::new(format!("Provincia: {} ({})", prov.name, prov.id))
+                                                    .strong()
+                                                    .color(ACCENT_CYAN),
+                                            );
+                                            ui.label(
+                                                RichText::new(format!(
+                                                    "{} • {} • Relieve {:.2}",
+                                                    prov.admin_type, prov.terrain_type, prov.elevation_avg
+                                                ))
+                                                .size(11.5)
+                                                .color(TEXT_MUTED),
+                                            );
+                                        });
+                                }
+                            }
+                        }
                         ui.separator();
                         ui.label(format!("Población: {}", format_population(country.population)));
                         ui.label(format!(

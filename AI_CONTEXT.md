@@ -12,14 +12,16 @@ Este archivo resume el estado exacto, las decisiones arquitectónicas y las rest
 
 ## 2. Estado actual del motor
 - **Interfaz actual (`game/src/ui/`):** Usa `eframe` / `egui` (`0.31`) con arquitectura multipantalla (`MainMenu`, `CountrySelect`, `WorldMap`, `Economy`, `Politics`, `Diplomacy`, `Military`, `Settings`) y popups modales (`EventPopup`, `Popup País`).
-- **Preparación 3D (`game/Cargo.toml`):** Ya están declaradas `wgpu = "24"`, `egui-wgpu = "0.31"`, `egui-winit = "0.31"` y `gltf = "1.4"` para migrar del mapa SVG 2D (`latinoamerica.svg`) al mapa 3D generado en Blender (`latinoamerica_3d.glb`).
+- **Visor 3D operativo (`wgpu 24` + `egui-wgpu 0.31` + `gltf 1.4`):** `game/src/map/glb_loader.rs` y `game/src/map/renderer_3d.rs` cargan `latinoamerica_3d.glb` junto a `scripts/provinces_latam.lua` (con respaldo automático SVG 2D si faltan), permitiendo pan/zoom/órbita táctil, 4 capas de mapa y raycasting 3D exacto por provincia y país.
 - **Hilos y concurrencia:** La simulación mensual (fórmulas Lua 5.4 + IA local paralela con `rayon`) corre en un hilo separado (`SimulationWorker` en `game/src/engine/mod.rs`) usando `crossbeam-channel`, manteniendo el hilo de interfaz libre a 60 FPS.
-- **Seguridad 32/64 bits:** Los modelos en `game/src/models/mod.rs` usan `u64`, `i64` y `f64` explícitos (nunca `usize` para población o PIB) para evitar desbordamientos en 32 bits (`armeabi-v7a`) mientras se evalúa pasar a 64 bits (`arm64-v8a`) como target principal por complejidad 3D/RAM.
+- **Seguridad 32/64 bits:** Los modelos en `game/src/models/mod.rs` usan `u64`, `i64` y `f64` explícitos (nunca `usize` para población o PIB) para evitar desbordamientos en 32 bits (`armeabi-v7a`) mientras ambos targets (`arm64-v8a` y `armeabi-v7a`) se compilan por separado.
 
-## 3. Pipeline Blender + GeoJSON + Lua 5.4
+## 3. Pipeline Blender + GeoJSON + Lua 5.4 + APK Manual
+- **Assets pesados excluidos de Git:** `latinoamerica_3d.glb` y `provinces_latam.lua` están en `.gitignore` para no inflar el repositorio y se distribuyen vía **GitHub Releases**.
 - **Script Blender (`game/tools/blender/build_latam_map.py`):** Descarga GeoJSON de Dominio Público (Natural Earth Admin-1 provincias y ciudades), proyecta Latinoamérica sin distorsión latitudinal, extruye cada provincia (`PROV_<ISO2>_<IDX>_<CODE>`) con relieve andino y coloca capitales (`CAP_<ISO2>`, `PCAP_*`), exportando `latinoamerica_3d.glb` y `provinces_latam.lua`.
 - **Script Lua (`game/tools/blender/sync_lua_metadata.lua`):** Ejecutado por `lua5.4` antes y después de Blender para leer colores/países de `countries_latam.lua` y validar el `provinces_latam.lua` resultante.
-- **GitHub Action (`/.github/workflows/build_blender_latam_map.yml`):** Configurado **estrictamente con `on: workflow_dispatch:`**. Nunca debe dispararse en `push` ni `pull_request`.
+- **GitHub Action Blender (`/.github/workflows/build_blender_latam_map.yml`):** Configurado **estrictamente con `on: workflow_dispatch:`** con opción condicional `publish_release` + `release_version`. Nunca se dispara en `push` ni `pull_request`.
+- **GitHub Action APK Debug (`/.github/workflows/android_apk.yml`):** Configurado **estrictamente con `on: workflow_dispatch:`**; descarga `.glb` y `.lua` desde GitHub Releases, restaura y guarda obligatoriamente la caché (`if: always()`) y genera dos artefactos separados: 64 bits (`arm64-v8a`) y 32 bits (`armeabi-v7a`).
 
 ## 4. Restricciones críticas
 1. **Cero Kotlin / Cero Google Play:** La app Android arranca vía `NativeActivity` (`hasCode="false"`). No añadir código Kotlin ni SDKs de Google Play.

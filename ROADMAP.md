@@ -19,10 +19,10 @@ Este documento describe la evolución planificada del proyecto desde el prototip
 - [x] GitHub Action estrictamente manual (`workflow_dispatch`) para generar el `.glb` en la nube sin necesitar PC.
 - [x] Dependencias base 3D agregadas en `Cargo.toml` (`wgpu`, `egui-wgpu`, `egui-winit`, `gltf`).
 
-## Fase 3 — Renderizador 3D Nativo (`wgpu` + `gltf`) y Nivel Provincial
-- [ ] Reemplazar el backend `eframe/glow` por un ciclo propio `winit` + `wgpu` + `egui-wgpu` sobre Vulkan en Android.
-- [ ] Cargar `latinoamerica_3d.glb` con `gltf`, renderizar relieve andino, iluminación direccional, fronteras y pines de capitales.
-- [ ] Implementar selección táctil 3D (*raycasting* con `glam` / `parry3d`) sobre las mallas `PROV_*`.
+## Fase 3 — Renderizador 3D Nativo (`wgpu` + `gltf`) y Nivel Provincial (En curso)
+- [x] Reemplazar el backend `eframe/glow` por `eframe` con `wgpu` (`egui-wgpu`) sobre Vulkan/GLES en Android.
+- [x] Cargar `latinoamerica_3d.glb` con `gltf`, renderizar relieve andino, iluminación direccional, fronteras, ríos y capitales.
+- [x] Implementar selección táctil 3D (*raycasting* Möller-Trumbore con `glam`) sobre las mallas `PROV_*`.
 - [ ] Expandir el modelo de datos en Rust/Lua para gestionar economía, población e infraestructura a nivel de **provincia**.
 - [ ] Evaluar migración de arquitectura principal exclusiva a **64 bits (`arm64-v8a`)** conforme crezca la complejidad de mallas 3D y memoria.
 

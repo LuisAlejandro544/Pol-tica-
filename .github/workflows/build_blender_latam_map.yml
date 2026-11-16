@@ -1,7 +1,8 @@
 # Propósito del archivo:
 # GitHub Action EXCLUSIVAMENTE MANUAL (`workflow_dispatch`) para generar el mapa 3D
 # de Latinoamérica en Blender (.glb) y el catálogo de provincias/capitales en Lua 5.4.
-# No se ejecuta en pushes ni pull requests: solo cuando el usuario lo lance manualmente.
+# Opcionalmente permite subir ambos archivos como un GitHub Release con versión propia
+# (si no se activa, ese paso se omite). Nunca se ejecuta en pushes ni pull requests.
 
 name: Generar Mapa 3D Blender (Manual)
 
@@ -14,10 +15,20 @@ on:
         default: "0.05"
         type: string
       commit_assets:
-        description: "¿Hacer commit automático del .glb y provinces_latam.lua al repositorio?"
+        description: "¿Forzar commit al repositorio? (No recomendado si está en .gitignore)"
         required: true
         default: false
         type: boolean
+      publish_release:
+        description: "¿Publicar latinoamerica_3d.glb y provinces_latam.lua en un GitHub Release?"
+        required: true
+        default: false
+        type: boolean
+      release_version:
+        description: "Versión/Tag del Release (ej. map-v0.1.0, usado solo si activas Release)"
+        required: false
+        default: "map-v0.1.0"
+        type: string
 
 permissions:
   contents: write
@@ -102,11 +113,37 @@ jobs:
             game/assets/maps/latinoamerica_3d.glb
             game/assets/scripts/provinces_latam.lua
 
-      - name: Guardar cambios en el repositorio (si se activó manualmente)
+      - name: Publicar mapa 3D y provincias en GitHub Release (opcional)
+        if: ${{ inputs.publish_release }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_version }}
+        run: |
+          RELEASE_TAG="$(echo "$RELEASE_TAG" | xargs)"
+          if [ -z "$RELEASE_TAG" ]; then
+            echo "Error: Debes especificar una versión/tag en release_version si activas publish_release." >&2
+            exit 1
+          fi
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Actualizando assets del Release existente: $RELEASE_TAG"
+            gh release upload "$RELEASE_TAG" \
+              game/assets/maps/latinoamerica_3d.glb \
+              game/assets/scripts/provinces_latam.lua \
+              --clobber
+          else
+            echo "Creando nuevo Release: $RELEASE_TAG"
+            gh release create "$RELEASE_TAG" \
+              game/assets/maps/latinoamerica_3d.glb \
+              game/assets/scripts/provinces_latam.lua \
+              --title "Mapa 3D Latinoamérica ($RELEASE_TAG)" \
+              --notes "Assets cartográficos 3D generados con Blender + Natural Earth (latinoamerica_3d.glb y provinces_latam.lua)."
+          fi
+
+      - name: Guardar cambios en el repositorio (solo si se activó manualmente)
         if: ${{ inputs.commit_assets }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add game/assets/maps/latinoamerica_3d.glb game/assets/scripts/provinces_latam.lua
+          git add -f game/assets/maps/latinoamerica_3d.glb game/assets/scripts/provinces_latam.lua
           git diff --cached --quiet || git commit -m "Generar mapa 3D Blender (.glb) y provincias en Lua 5.4"
           git push

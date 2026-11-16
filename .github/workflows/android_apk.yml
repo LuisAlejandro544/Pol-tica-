@@ -1,0 +1,151 @@
+# Propósito del archivo:
+# Flujo EXCLUSIVAMENTE MANUAL (`workflow_dispatch`) para compilar el APK Debug
+# de Horizonte Latam (Rust + Lua 5.4 + wgpu) en dos arquitecturas independientes:
+# 64 bits (`arm64-v8a`) y 32 bits (`armeabi-v7a`).
+# Descarga `latinoamerica_3d.glb` y `provinces_latam.lua` desde GitHub Releases,
+# guarda obligatoriamente la caché de Cargo/target/Gradle y sube cada APK por separado.
+
+name: Compilar APK Debug (Manual — 64-bit y 32-bit)
+
+on:
+  workflow_dispatch:
+    inputs:
+      map_release_tag:
+        description: "Tag del Release para descargar el mapa 3D (.glb y .lua), o 'latest' para el último"
+        required: true
+        default: "latest"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build-apk-debug:
+    name: APK Debug (${{ matrix.arch_label }} / ${{ matrix.abi }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch_label: "64bit"
+            abi: "arm64-v8a"
+            rust_target: "aarch64-linux-android"
+          - arch_label: "32bit"
+            abi: "armeabi-v7a"
+            rust_target: "armv7-linux-androideabi"
+
+    steps:
+      - name: Descargar repositorio
+        uses: actions/checkout@v4
+
+      - name: Descargar mapa 3D y provincias desde GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MAP_TAG: ${{ inputs.map_release_tag }}
+        run: |
+          mkdir -p game/assets/maps game/assets/scripts /tmp/release_map
+          TAG_CLEAN="$(echo "$MAP_TAG" | xargs)"
+          if [ -z "$TAG_CLEAN" ] || [ "$TAG_CLEAN" = "latest" ]; then
+            gh release download \
+              --pattern "latinoamerica_3d.glb" \
+              --pattern "provinces_latam.lua" \
+              --dir /tmp/release_map \
+              --clobber
+          else
+            gh release download "$TAG_CLEAN" \
+              --pattern "latinoamerica_3d.glb" \
+              --pattern "provinces_latam.lua" \
+              --dir /tmp/release_map \
+              --clobber
+          fi
+          cp /tmp/release_map/latinoamerica_3d.glb game/assets/maps/latinoamerica_3d.glb
+          cp /tmp/release_map/provinces_latam.lua game/assets/scripts/provinces_latam.lua
+          ls -lh game/assets/maps/latinoamerica_3d.glb game/assets/scripts/provinces_latam.lua
+
+      - name: Instalar Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Configurar Android SDK y NDK 27.2.12479018
+        run: |
+          SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
+          SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018"
+
+      - name: Instalar Rust estable y target ${{ matrix.rust_target }}
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Restaurar caché obligatoria (Cargo, target y Gradle)
+        id: restore-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/bin/cargo-ndk
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            game/target
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: apk-debug-${{ matrix.abi }}-${{ hashFiles('game/Cargo.toml', 'game/rust-toolchain.toml', 'game/android/**/*.kts') }}-${{ github.run_id }}
+          restore-keys: |
+            apk-debug-${{ matrix.abi }}-${{ hashFiles('game/Cargo.toml', 'game/rust-toolchain.toml', 'game/android/**/*.kts') }}-
+            apk-debug-${{ matrix.abi }}-
+
+      - name: Instalar dependencias Rust (cargo-ndk y dependencias del crate)
+        working-directory: game
+        run: |
+          command -v cargo-ndk >/dev/null 2>&1 || cargo install cargo-ndk
+          cargo fetch --target "${{ matrix.rust_target }}"
+
+      - name: Configurar Gradle 8.11
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.11.1"
+
+      - name: Compilar APK Debug vía Gradle + cargo-ndk (${{ matrix.abi }})
+        working-directory: game/android
+        run: |
+          gradle assembleDebug \
+            -PrustAbi=${{ matrix.abi }} \
+            -PrustProfile=debug \
+            --no-daemon
+
+      - name: Guardar caché obligatoria (siempre se guarda)
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/bin/cargo-ndk
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            game/target
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: apk-debug-${{ matrix.abi }}-${{ hashFiles('game/Cargo.toml', 'game/rust-toolchain.toml', 'game/android/**/*.kts') }}-${{ github.run_id }}
+
+      - name: Renombrar APK Debug para arquitectura ${{ matrix.arch_label }}
+        run: |
+          mkdir -p /tmp/apk_out_${{ matrix.abi }}
+          APK_SRC=$(find game/android/app/build/outputs/apk/debug -name "*.apk" | head -n 1)
+          if [ -z "$APK_SRC" ]; then
+            echo "Error: No se encontró el APK Debug generado." >&2
+            exit 1
+          fi
+          cp "$APK_SRC" "/tmp/apk_out_${{ matrix.abi }}/HorizonteLatam-debug-${{ matrix.arch_label }}-${{ matrix.abi }}.apk"
+          ls -lh "/tmp/apk_out_${{ matrix.abi }}"
+
+      - name: Subir APK Debug (${{ matrix.arch_label }} / ${{ matrix.abi }}) como artefacto separado
+        uses: actions/upload-artifact@v4
+        with:
+          name: HorizonteLatam-debug-${{ matrix.arch_label }}-${{ matrix.abi }}
+          path: /tmp/apk_out_${{ matrix.abi }}/*.apk
+          if-no-files-found: error
