@@ -1,0 +1,12 @@
+# Configuración de la cadena de herramientas Rust (última versión estable).
+# Incluye los targets Android de 64 bits (arm64-v8a), 32 bits (armeabi-v7a)
+# y emulador x86_64 para compilar APK multi-arquitectura sin dependencias de Kotlin.
+
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy"]
+targets = [
+  "aarch64-linux-android",
+  "armv7-linux-androideabi",
+  "x86_64-linux-android"
+]

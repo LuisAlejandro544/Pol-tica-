@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Mapa vectorial geopolítico de Latinoamérica (21 naciones).
+  Cada país está definido como un elemento <path> con atributo id en formato ISO-3166 alpha-2
+  y atributo data-name con el nombre en español. Este mismo archivo SVG sirve tanto para
+  previsualización vectorial como para ser parseado y teselado en GPU por el motor Rust.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 1200" width="1000" height="1200">
+  <defs>
+    <linearGradient id="oceanGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0b1b2b" />
+      <stop offset="50%" stop-color="#0f2840" />
+      <stop offset="100%" stop-color="#091726" />
+    </linearGradient>
+    <pattern id="latlonGrid" width="80" height="80" patternUnits="userSpaceOnUse">
+      <path d="M 80 0 L 0 0 0 80" fill="none" stroke="#1e4263" stroke-width="0.7" stroke-opacity="0.4" />
+    </pattern>
+  </defs>
+
+  <!-- Fondo oceánico y retícula cartográfica -->
+  <rect id="OCEAN" x="0" y="0" width="1000" height="1200" fill="url(#oceanGrad)" />
+  <rect id="GRID" x="0" y="0" width="1000" height="1200" fill="url(#latlonGrid)" />
+
+  <!-- Capa de países de Latinoamérica -->
+  <g id="latam-countries" stroke="#0d1b2a" stroke-width="1.8" stroke-linejoin="round">
+    <!-- México -->
+    <path id="MX" data-name="México" fill="#2f855a"
+      d="M 65 82 L 138 78 L 210 92 L 246 135 L 254 176 L 235 206 L 242 232 L 278 242 L 325 224 L 348 225 L 352 252 L 326 270 L 302 266 L 272 280 L 242 276 L 204 252 L 154 226 L 122 192 L 106 154 L 84 128 L 76 168 L 64 146 L 56 112 Z" />
+
+    <!-- Belice -->
+    <path id="BZ" data-name="Belice" fill="#319795"
+      d="M 332 266 L 347 265 L 348 292 L 333 292 Z" />
+
+    <!-- Guatemala -->
+    <path id="GT" data-name="Guatemala" fill="#2b6cb0"
+      d="M 302 266 L 326 270 L 333 266 L 333 292 L 338 308 L 312 315 L 296 300 Z" />
+
+    <!-- El Salvador -->
+    <path id="SV" data-name="El Salvador" fill="#4c51bf"
+      d="M 312 315 L 338 308 L 348 318 L 322 325 Z" />
+
+    <!-- Honduras -->
+    <path id="HN" data-name="Honduras" fill="#2c7a7b"
+      d="M 333 292 L 348 292 L 392 296 L 404 312 L 372 324 L 348 318 L 338 308 Z" />
+
+    <!-- Nicaragua -->
+    <path id="NI" data-name="Nicaragua" fill="#38a169"
+      d="M 348 318 L 372 324 L 404 312 L 408 352 L 376 356 L 355 338 Z" />
+
+    <!-- Costa Rica -->
+    <path id="CR" data-name="Costa Rica" fill="#3182ce"
+      d="M 376 356 L 408 352 L 420 374 L 406 388 L 385 372 Z" />
+
+    <!-- Panamá -->
+    <path id="PA" data-name="Panamá" fill="#d69e2e"
+      d="M 406 388 L 420 374 L 456 376 L 482 390 L 478 404 L 444 398 L 414 396 Z" />
+
+    <!-- Cuba -->
+    <path id="CU" data-name="Cuba" fill="#c53030"
+      d="M 366 206 L 412 194 L 468 206 L 512 222 L 504 234 L 454 226 L 406 218 L 368 220 Z" />
+
+    <!-- Haití -->
+    <path id="HT" data-name="Haití" fill="#805ad5"
+      d="M 526 226 L 556 222 L 558 248 L 528 248 L 520 236 Z" />
+
+    <!-- República Dominicana -->
+    <path id="DO" data-name="República Dominicana" fill="#dd6b20"
+      d="M 556 222 L 598 226 L 604 246 L 574 252 L 558 248 Z" />
+
+    <!-- Colombia -->
+    <path id="CO" data-name="Colombia" fill="#ecc94b"
+      d="M 482 390 L 522 368 L 558 378 L 568 418 L 596 446 L 582 486 L 550 510 L 522 496 L 484 484 L 468 446 L 478 404 Z" />
+
+    <!-- Venezuela -->
+    <path id="VE" data-name="Venezuela" fill="#9b2c2c"
+      d="M 522 368 L 586 358 L 648 366 L 672 394 L 656 432 L 622 456 L 596 446 L 568 418 L 558 378 Z" />
+
+    <!-- Ecuador -->
+    <path id="EC" data-name="Ecuador" fill="#38b2ac"
+      d="M 456 488 L 484 484 L 522 496 L 508 532 L 468 534 L 452 512 Z" />
+
+    <!-- Perú -->
+    <path id="PE" data-name="Perú" fill="#e53e3e"
+      d="M 468 534 L 508 532 L 522 496 L 550 510 L 574 552 L 582 612 L 568 656 L 526 672 L 482 628 L 458 574 Z" />
+
+    <!-- Brasil -->
+    <path id="BR" data-name="Brasil" fill="#2f855a"
+      d="M 582 486 L 596 446 L 622 456 L 656 432 L 708 426 L 762 456 L 832 488 L 910 530 L 926 574 L 902 642 L 856 716 L 806 768 L 768 812 L 732 862 L 696 842 L 698 800 L 664 762 L 642 718 L 638 666 L 598 632 L 582 612 L 574 552 L 550 510 Z" />
+
+    <!-- Bolivia -->
+    <path id="BO" data-name="Bolivia" fill="#d69e2e"
+      d="M 568 656 L 582 612 L 598 632 L 638 666 L 642 718 L 614 736 L 574 732 L 556 702 Z" />
+
+    <!-- Paraguay -->
+    <path id="PY" data-name="Paraguay" fill="#3182ce"
+      d="M 614 736 L 642 718 L 664 762 L 672 802 L 636 806 L 606 774 Z" />
+
+    <!-- Uruguay -->
+    <path id="UY" data-name="Uruguay" fill="#4299e1"
+      d="M 696 842 L 732 862 L 722 904 L 682 900 L 676 864 Z" />
+
+    <!-- Chile -->
+    <path id="CL" data-name="Chile" fill="#c53030"
+      d="M 526 672 L 568 656 L 556 702 L 562 762 L 558 836 L 548 920 L 542 1018 L 558 1094 L 546 1132 L 516 1096 L 512 1002 L 520 906 L 526 814 L 524 734 Z" />
+
+    <!-- Argentina -->
+    <path id="AR" data-name="Argentina" fill="#63b3ed"
+      d="M 556 702 L 574 732 L 614 736 L 606 774 L 636 806 L 672 802 L 676 864 L 682 900 L 668 946 L 632 982 L 606 1040 L 586 1106 L 558 1138 L 546 1132 L 558 1094 L 542 1018 L 548 920 L 558 836 L 562 762 Z" />
+  </g>
+</svg>

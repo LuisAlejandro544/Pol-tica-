@@ -1,0 +1,81 @@
+# Propósito del archivo:
+# GitHub Action EXCLUSIVAMENTE MANUAL (`workflow_dispatch`) para generar el mapa 3D
+# de Latinoamérica en Blender (.glb) y el catálogo de provincias/capitales en Lua 5.4.
+# No se ejecuta en pushes ni pull requests: solo cuando el usuario lo lance manualmente.
+
+name: Generar Mapa 3D Blender (Manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      simplify_tolerance:
+        description: "Tolerancia de simplificación GeoJSON en grados (menor = más detalle)"
+        required: true
+        default: "0.05"
+        type: string
+      commit_assets:
+        description: "¿Hacer commit automático del .glb y provinces_latam.lua al repositorio?"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  build-blender-map:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Descargar repositorio
+        uses: actions/checkout@v4
+
+      - name: Instalar Lua 5.4 y utilidades base
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y lua5.4 curl xz-utils libxi6 libxxf86vm1 libxfixes3 libxrender1 libgl1 libxkbcommon0
+
+      - name: Instalar Blender 4.3 LTS (headless)
+        run: |
+          BLENDER_VER="4.3.2"
+          curl -sSL "https://download.blender.org/release/Blender4.3/blender-${BLENDER_VER}-linux-x64.tar.xz" -o /tmp/blender.tar.xz
+          tar -xf /tmp/blender.tar.xz -C /opt
+          sudo ln -sf "/opt/blender-${BLENDER_VER}-linux-x64/blender" /usr/local/bin/blender
+          blender --version
+
+      - name: Paso Lua 5.4 — Exportar metadatos y colores desde countries_latam.lua
+        run: |
+          lua5.4 game/tools/blender/sync_lua_metadata.lua \
+            export-countries \
+            game/assets/scripts/countries_latam.lua \
+            /tmp/latam_countries.json
+
+      - name: Paso Blender Python — Construir mapa 3D (.glb) y provinces_latam.lua desde GeoJSON
+        run: |
+          blender --background --python game/tools/blender/build_latam_map.py -- \
+            --countries-json /tmp/latam_countries.json \
+            --out-glb game/assets/maps/latinoamerica_3d.glb \
+            --out-lua game/assets/scripts/provinces_latam.lua \
+            --simplify-tol "${{ inputs.simplify_tolerance }}"
+
+      - name: Paso Lua 5.4 — Validar sintaxis e integridad de provinces_latam.lua
+        run: |
+          lua5.4 game/tools/blender/sync_lua_metadata.lua \
+            validate-provinces \
+            game/assets/scripts/provinces_latam.lua
+
+      - name: Subir mapa 3D (.glb) y provincias (.lua) como artefactos
+        uses: actions/upload-artifact@v4
+        with:
+          name: latam-3d-blender-assets
+          path: |
+            game/assets/maps/latinoamerica_3d.glb
+            game/assets/scripts/provinces_latam.lua
+
+      - name: Guardar cambios en el repositorio (si se activó manualmente)
+        if: ${{ inputs.commit_assets }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add game/assets/maps/latinoamerica_3d.glb game/assets/scripts/provinces_latam.lua
+          git diff --cached --quiet || git commit -m "Generar mapa 3D Blender (.glb) y provincias en Lua 5.4"
+          git push

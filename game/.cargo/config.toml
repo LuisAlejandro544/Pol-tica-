@@ -1,0 +1,12 @@
+# Configuración de compilación cruzada Cargo para Android 64-bit y 32-bit.
+# Optimiza instrucciones NEON en ARMv7 (32-bit) y ARMv8 (64-bit) y configura
+# el tamaño de página de 16 KB requerido por Android 15+ en arm64-v8a.
+
+[target.aarch64-linux-android]
+rustflags = ["-C", "link-arg=-Wl,-z,max-page-size=16384"]
+
+[target.armv7-linux-androideabi]
+rustflags = ["-C", "target-feature=+neon,+vfp3"]
+
+[target.x86_64-linux-android]
+rustflags = ["-C", "link-arg=-Wl,-z,max-page-size=16384"]

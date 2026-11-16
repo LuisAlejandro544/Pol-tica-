@@ -1,0 +1,68 @@
+# Manifiesto principal del motor y juego móvil en Rust + Lua 5.4.
+# Toda la interfaz gráfica, simulación geopolítica, IA local y puente Lua corren
+# nativamente en Rust. Todas las dependencias utilizan licencias permisivas
+# (MIT / Apache-2.0) sin copyleft ni obligación de liberar código fuente.
+
+[package]
+name = "horizonte_latam"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "Apache-2.0"
+description = "Juego de estrategia geopolítica horizontal para móvil construido en Rust y Lua 5.4."
+
+[lib]
+name = "horizonte_latam"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# Interfaz gráfica nativa multiplataforma y Android sin Kotlin (licencia MIT OR Apache-2.0)
+eframe = { version = "0.31", default-features = false, features = ["glow", "default_fonts"] }
+egui = "0.31"
+egui_extras = "0.31"
+
+# Preparación del pipeline 3D moderno (Blender .glb + Vulkan/wgpu + egui) (MIT OR Apache-2.0)
+wgpu = "24"
+egui-wgpu = "0.31"
+egui-winit = { version = "0.31", features = ["android-native-activity"] }
+gltf = "1.4"
+
+# Ciclo de vida nativo de Android (NativeActivity para C/Rust puro) (MIT OR Apache-2.0)
+android-activity = { version = "0.6", features = ["native-activity"] }
+
+# Motor de scripting Lua 5.4 compilado estáticamente dentro del binario .so (MIT)
+mlua = { version = "0.10", features = ["lua54", "vendored", "serialize", "send"] }
+
+# Serialización de estado, partidas guardadas y datos Lua <-> Rust (MIT OR Apache-2.0)
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Lectura e interpretación nativa del mapa vectorial latinoamerica.svg (MIT OR Apache-2.0)
+roxmltree = "0.20"
+svgtypes = "0.15"
+lyon_tessellation = "1.0"
+
+# Paralelismo e hilos de fondo para que la IA local y Lua no bloqueen la UI (MIT OR Apache-2.0)
+rayon = "1.10"
+crossbeam-channel = "0.5"
+parking_lot = "0.12"
+
+# Generación determinista pseudoaleatoria para eventos e IA (MIT OR Apache-2.0)
+rand = "0.9"
+rand_chacha = "0.9"
+
+# Incrustación de assets (.svg y .lua) directo en el binario compilado (MIT)
+include_dir = "0.7"
+
+# Manejo de errores y logs nativos en Android Logcat (MIT OR Apache-2.0)
+thiserror = "2.0"
+log = "0.4"
+
+[target.'cfg(target_os = "android")'.dependencies]
+android_logger = "0.14"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

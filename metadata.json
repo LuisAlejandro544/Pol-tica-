@@ -1,0 +1,6 @@
+{
+  "name": "Horizonte Latam: Estrategia",
+  "description": "Juego móvil horizontal de estrategia geopolítica en Rust y Lua con host web Hello World.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
