@@ -1,9 +1,9 @@
 //! Propósito del archivo:
 //! Motor de Inteligencia Artificial local 100% escrito en Rust para todas las naciones
 //! rivales de Latinoamérica. Evalúa indicadores macroeconómicos, riesgo de inflación,
-//! presión parlamentaria, reclutamiento con impacto en mantenimiento/tesorería,
-//! maniobras de tropas entre estados/provincias, personalidad geopolítica y relaciones
-//! con países vecinos usando paralelismo con `rayon` en hilos de fondo.
+//! presión parlamentaria, presupuesto militar mensual dedicado, tope de tropas en paz/guerra,
+//! enfriamiento de reclutamiento sin spam de unidades, maniobras entre estados/provincias
+//! y relaciones diplomáticas usando paralelismo con `rayon` en hilos de fondo.
 
 use crate::models::{
     AiPersonality, ArmyUnit, CountryState, Difficulty, GameState, ProvinceGraph,
@@ -60,6 +60,56 @@ pub fn evaluate_ai_countries(state: &GameState, graph: &ProvinceGraph) -> Vec<Ai
         .collect()
 }
 
+/// Reserva mínima de tesorería (M USD) proporcional al PIB mensual que la IA debe conservar.
+pub fn compute_ai_min_treasury_reserve(country: &CountryState) -> f64 {
+    let monthly_gdp = country.economy.gdp_usd_millions / 12.0;
+    (monthly_gdp * 0.45).clamp(150.0, 3_500.0)
+}
+
+/// Calcula el tope objetivo de tropas sostenibles para una nación IA según población,
+/// capacidad fiscal (límite de mantenimiento), personalidad y estado de paz/guerra.
+pub fn compute_ai_target_troops(
+    country: &CountryState,
+    state: &GameState,
+    difficulty_mult: f64,
+) -> u64 {
+    let at_war = state.country_at_war(&country.id);
+    let has_hostile_neighbor = country.neighbors.iter().any(|nb| {
+        let rel = state.get_relation(&country.id, nb);
+        !rel.alliance && !rel.non_aggression_pact && rel.opinion < -35.0
+    });
+
+    let pop_cap = (country.population as f64) * 0.0024;
+    let monthly_gdp = (country.economy.gdp_usd_millions / 12.0).max(50.0);
+    let monthly_tax_rev = monthly_gdp * (country.economy.tax_rate_pct / 100.0);
+    let max_upkeep_share = if at_war {
+        0.28
+    } else if has_hostile_neighbor {
+        0.20
+    } else {
+        0.16
+    };
+    let econ_troop_cap = ((monthly_tax_rev * max_upkeep_share) / 1.35) * 1_000.0;
+    let base_cap = pop_cap.min(econ_troop_cap * 1.15).max(1_500.0);
+
+    let personality_mult = match country.ai_personality {
+        AiPersonality::Economista => 0.80,
+        AiPersonality::Nacionalista => 1.18,
+        AiPersonality::Reformista => 0.95,
+        AiPersonality::Diplomatico => 0.85,
+    };
+    let geo_mult = if at_war {
+        1.55
+    } else if has_hostile_neighbor {
+        1.18
+    } else {
+        1.0
+    };
+
+    let raw = base_cap * personality_mult * geo_mult * difficulty_mult;
+    ((raw / 500.0).floor() as u64).max(3) * 500
+}
+
 fn decide_for_country(
     country: &CountryState,
     state: &GameState,
@@ -82,24 +132,50 @@ fn decide_for_country(
     let mut move_unit = None;
     let mut log_message = None;
 
-    // 1. Política monetaria: control de inflación y estabilidad cambiaria
-    if country.economy.inflation_pct > 10.0 {
-        interest = (interest + 0.75 * difficulty_mult).min(45.0);
-    } else if country.economy.inflation_pct < 3.0 && country.economy.gdp_growth_pct < 2.2 {
-        interest = (interest - 0.35).max(2.0);
-    }
+    // 1. Política monetaria estilo Regla de Taylor frente a tasa neutral y riesgo país
+    let inf_target = country.economy.inflation_target_pct.max(2.5);
+    let neutral_real = 2.25 + (country.economy.country_risk_bps / 1400.0);
+    let taylor_rate = (inf_target
+        + neutral_real
+        + (country.economy.inflation_pct - inf_target) * 1.35
+        + (country.economy.gdp_growth_pct - country.economy.potential_gdp_growth_pct) * 0.45)
+        .clamp(2.0, 48.0);
+    let rate_step = (taylor_rate - interest).clamp(-0.65, 0.75 * difficulty_mult);
+    interest = (interest + rate_step).clamp(2.0, 48.0);
 
-    // 2. Política fiscal, gasto y reclutamiento consciente del mantenimiento mensual
+    // 2. Política fiscal, presupuesto militar dedicado, tope paz/guerra y límite de mantenimiento
     let own_provinces: Vec<&String> = graph
         .iter()
         .filter(|(_, node)| node.country_id == country.id)
         .map(|(mesh, _)| mesh)
         .collect();
 
-    let can_afford_upkeep = country.economy.treasury_usd_millions > 900.0
-        && country.economy.last_monthly_balance > -15.0;
+    let at_war = state.country_at_war(&country.id);
+    let has_hostile_neighbor = country.neighbors.iter().any(|nb| {
+        let rel = state.get_relation(&country.id, nb);
+        !rel.alliance && !rel.non_aggression_pact && rel.opinion < -35.0
+    });
 
-    match country.ai_personality {
+    let monthly_gdp = (country.economy.gdp_usd_millions / 12.0).max(50.0);
+    let monthly_tax_rev = monthly_gdp * (country.economy.tax_rate_pct / 100.0);
+    let target_troops = compute_ai_target_troops(country, state, difficulty_mult);
+    let troop_deficit = target_troops.saturating_sub(country.military.active_troops);
+
+    let cooldown_days = if at_war { 18 } else { 30 };
+    let cooldown_ready =
+        state.total_days.saturating_sub(country.military.last_ai_recruit_day) >= cooldown_days;
+
+    let min_reserve = compute_ai_min_treasury_reserve(country);
+    let max_upkeep_share = if at_war { 0.28 } else { 0.16 };
+    let max_upkeep_budget = monthly_tax_rev * max_upkeep_share;
+    let fiscal_healthy = country.economy.last_monthly_balance > -(monthly_gdp * 0.008);
+
+    // Ajuste prudente del presupuesto de defensa según situación fiscal y necesidad militar
+    if !at_war && (country.military.active_troops >= target_troops || !fiscal_healthy) {
+        defense = (defense - 0.10).max(0.5);
+    }
+
+    let desired_batch = match country.ai_personality {
         AiPersonality::Economista => {
             if country.economy.debt_to_gdp_pct > 75.0 {
                 tax = (tax + 0.5).min(32.0);
@@ -107,17 +183,25 @@ fn decide_for_country(
             } else {
                 infra = (infra + 0.4).min(7.5);
             }
-            if can_afford_upkeep
-                && country.economy.treasury_usd_millions > 2_500.0
-                && rng.random_bool(0.12)
-            {
-                recruit_troops = 1_500;
+            if at_war || (troop_deficit >= 1_500 && rng.random_bool(0.35)) {
+                1_500
+            } else {
+                0
             }
         }
         AiPersonality::Nacionalista => {
-            defense = (defense + 0.25 * difficulty_mult).min(4.5);
-            if can_afford_upkeep && rng.random_bool(0.32) {
-                recruit_troops = ((country.population / 18_000).clamp(1_000, 3_500) / 500) * 500;
+            if (at_war || has_hostile_neighbor || troop_deficit > 2_000) && fiscal_healthy {
+                defense = (defense + 0.15 * difficulty_mult).min(3.8);
+            }
+            if troop_deficit >= 1_000 && (at_war || rng.random_bool(0.55)) {
+                let scaled = ((country.population / 22_000).clamp(1_000, 3_000) / 500) * 500;
+                if at_war {
+                    scaled.max(1_500)
+                } else {
+                    scaled.min(2_000)
+                }
+            } else {
+                0
             }
         }
         AiPersonality::Reformista => {
@@ -127,16 +211,34 @@ fn decide_for_country(
             if country.economy.gdp_growth_pct < 2.5 {
                 tax = (tax - 0.3).max(12.0);
             }
-            if can_afford_upkeep && rng.random_bool(0.15) {
-                recruit_troops = 1_000;
+            if troop_deficit >= 1_000 && (at_war || rng.random_bool(0.40)) {
+                1_000
+            } else {
+                0
             }
         }
         AiPersonality::Diplomatico => {
             social = (social + 0.2).min(7.0);
             infra = (infra + 0.25).min(6.5);
-            if can_afford_upkeep && rng.random_bool(0.16) {
-                recruit_troops = 1_000;
+            if troop_deficit >= 1_000 && (at_war || rng.random_bool(0.35)) {
+                1_000
+            } else {
+                0
             }
+        }
+    };
+
+    let candidate_batch = (desired_batch.min(troop_deficit) / 500) * 500;
+    if cooldown_ready && candidate_batch >= 500 && fiscal_healthy {
+        let batch_cost_m = (candidate_batch as f64 / 1_000.0) * 70.0;
+        let projected_upkeep =
+            ((country.military.active_troops + candidate_batch) as f64 / 1_000.0) * 1.35;
+
+        if country.military.ai_military_budget_m >= batch_cost_m
+            && country.economy.treasury_usd_millions >= min_reserve + batch_cost_m
+            && projected_upkeep <= max_upkeep_budget
+        {
+            recruit_troops = candidate_batch;
         }
     }
 
@@ -317,6 +419,8 @@ pub fn apply_ai_decisions(
 ) {
     for d in decisions {
         let mut recruited_info: Option<(String, u64, String)> = None;
+        let at_war = state.country_at_war(&d.country_id);
+        let total_days = state.total_days;
 
         if let Some(country) = state.countries.get_mut(&d.country_id) {
             country.economy.tax_rate_pct = d.new_tax_rate;
@@ -325,10 +429,39 @@ pub fn apply_ai_decisions(
             country.economy.social_investment_pct = d.new_social_pct;
             country.military.defense_budget_pct = d.new_defense_pct;
 
+            // Si la nación IA gobierna en minoría y dispone de capital político, negocia coalición
+            if country.legislative_support_pct < 50.0 && country.political_capital >= 22.0 {
+                if let Some(partner_acronym) = country
+                    .political_parties
+                    .iter()
+                    .filter(|p| {
+                        !p.is_ruling
+                            && !country.coalition_parties.iter().any(|ac| ac == &p.acronym)
+                    })
+                    .max_by(|a, b| {
+                        a.seats_pct
+                            .partial_cmp(&b.seats_pct)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    })
+                    .map(|p| p.acronym.clone())
+                {
+                    country.coalition_parties.push(partner_acronym);
+                    country.political_capital = (country.political_capital - 20.0).max(0.0);
+                    country.legislative_support_pct = country.compute_legislative_support_pct();
+                }
+            }
+
+            let cooldown_days = if at_war { 18 } else { 30 };
+            let min_reserve = compute_ai_min_treasury_reserve(country);
             let cost_m = (d.recruit_troops as f64 / 1_000.0) * 70.0;
             if d.recruit_troops > 0
-                && country.economy.treasury_usd_millions >= cost_m + 200.0
+                && total_days.saturating_sub(country.military.last_ai_recruit_day) >= cooldown_days
+                && country.military.ai_military_budget_m >= cost_m
+                && country.economy.treasury_usd_millions >= cost_m + min_reserve
             {
+                country.military.ai_military_budget_m =
+                    (country.military.ai_military_budget_m - cost_m).max(0.0);
+                country.military.last_ai_recruit_day = total_days;
                 country.economy.treasury_usd_millions -= cost_m;
                 country.military.active_troops += d.recruit_troops;
                 country.economy.troop_upkeep_usd_millions = country.estimated_troop_upkeep_m();
@@ -339,33 +472,76 @@ pub fn apply_ai_decisions(
         }
 
         if let Some((prov_mesh, troops, cname)) = recruited_info {
-            let world_pos = graph
-                .get(&prov_mesh)
-                .map(|p| p.world_pos)
-                .unwrap_or([0.0, 0.5, 0.0]);
-            let prov_label = graph
-                .get(&prov_mesh)
-                .map(|p| p.name.clone())
-                .unwrap_or_else(|| prov_mesh.clone());
+            let own_provs_count = graph
+                .values()
+                .filter(|p| p.country_id == d.country_id)
+                .count();
+            let max_ai_divisions = own_provs_count.clamp(2, 6);
+            let existing_divs = state
+                .units
+                .iter()
+                .filter(|u| u.country_id == d.country_id)
+                .count();
 
-            let uid = state.next_unit_id;
-            state.next_unit_id += 1;
-            state.units.push(ArmyUnit {
-                id: uid,
-                name: format!("División {} #{uid}", d.country_id),
-                country_id: d.country_id.clone(),
-                troops,
-                current_province: prov_mesh,
-                target_province: None,
-                route_queue: Vec::new(),
-                march_progress: 0.0,
-                world_pos,
-                morale: 85.0,
-            });
-            state.push_chronicle(
-                d.country_id.clone(),
-                format!("{cname} recluta {troops} soldados en {prov_label}."),
-            );
+            // Evita spam de mini-unidades: refuerza divisiones existentes antes de crear una nueva
+            let reinforce_idx = state
+                .units
+                .iter()
+                .enumerate()
+                .filter(|(_, u)| u.country_id == d.country_id)
+                .filter(|(_, u)| existing_divs >= max_ai_divisions || u.troops < 18_000)
+                .min_by_key(|(_, u)| {
+                    let same_prov_penalty = if u.current_province == prov_mesh { 0 } else { 1 };
+                    (same_prov_penalty, u.troops)
+                })
+                .map(|(i, _)| i);
+
+            if let Some(idx) = reinforce_idx {
+                let (unit_name, prov_id) = {
+                    let u = &mut state.units[idx];
+                    u.troops += troops;
+                    u.morale = ((u.morale + 85.0) * 0.5).clamp(40.0, 95.0);
+                    (u.name.clone(), u.current_province.clone())
+                };
+                let prov_label = graph
+                    .get(&prov_id)
+                    .map(|p| p.name.clone())
+                    .unwrap_or(prov_id);
+                state.push_chronicle(
+                    d.country_id.clone(),
+                    format!(
+                        "{cname} refuerza {unit_name} con {troops} soldados en {prov_label} (cargo a presupuesto militar)."
+                    ),
+                );
+            } else {
+                let world_pos = graph
+                    .get(&prov_mesh)
+                    .map(|p| p.world_pos)
+                    .unwrap_or([0.0, 0.5, 0.0]);
+                let prov_label = graph
+                    .get(&prov_mesh)
+                    .map(|p| p.name.clone())
+                    .unwrap_or_else(|| prov_mesh.clone());
+
+                let uid = state.next_unit_id;
+                state.next_unit_id += 1;
+                state.units.push(ArmyUnit {
+                    id: uid,
+                    name: format!("División {} #{uid}", d.country_id),
+                    country_id: d.country_id.clone(),
+                    troops,
+                    current_province: prov_mesh,
+                    target_province: None,
+                    route_queue: Vec::new(),
+                    march_progress: 0.0,
+                    world_pos,
+                    morale: 85.0,
+                });
+                state.push_chronicle(
+                    d.country_id.clone(),
+                    format!("{cname} recluta {troops} soldados en {prov_label}."),
+                );
+            }
         }
 
         if let Some((unit_id, dest_prov)) = d.move_unit {
@@ -446,6 +622,8 @@ pub fn process_elections(state: &mut GameState) {
                 }
 
                 country.political_parties[best_idx].is_ruling = true;
+                country.coalition_parties.clear();
+                country.legislative_support_pct = country.compute_legislative_support_pct();
                 if country.political_parties[best_idx].leader.age > 74 {
                     let used: Vec<String> = country
                         .political_parties

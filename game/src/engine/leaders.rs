@@ -1,10 +1,10 @@
 //! Propósito del archivo:
-//! Generador modular de líderes políticos aleatorios (Presidente en ejercicio y líderes
-//! de todos los partidos de oposición) con nombre completo, edad y nacionalidad.
-//! Se aplica por igual al país del jugador y a todas las naciones controladas por la IA,
-//! preparando terreno para reformas, votaciones en el Congreso y sucesiones futuras.
+//! Generador modular de líderes políticos aleatorios (Presidente en ejercicio, líderes
+//! de todos los partidos de oposición y terna aleatoria de Ministros de Relaciones Exteriores
+//! con estadísticas diplomáticas aleatorias). Se aplica por igual al país del jugador y a
+//! todas las naciones controladas por la IA.
 
-use crate::models::{CountryState, LeaderProfile};
+use crate::models::{CountryState, ForeignMinister, ForeignMinisterStats, LeaderProfile};
 use rand::{rngs::ChaCha8Rng, RngExt, SeedableRng};
 use std::collections::BTreeMap;
 
@@ -292,4 +292,106 @@ pub fn generate_successor_leader(
 ) -> LeaderProfile {
     let mut rng = ChaCha8Rng::seed_from_u64(seed ^ 0x5355_4343_4553_5301);
     generate_single_leader(country_id, is_ruling, &mut rng, used_names)
+}
+
+const MINISTER_SPECIALTIES: &[&str] = &[
+    "Mediación de Paz",
+    "Arquitectura de Alianzas",
+    "Distensión Regional",
+    "Diplomacia Bilateral",
+];
+
+fn round1(v: f64) -> f64 {
+    (v * 10.0).round() / 10.0
+}
+
+/// Genera una lista aleatoria de candidatos a Ministro de Relaciones Exteriores con estadísticas propias.
+pub fn generate_minister_candidates(
+    country_id: &str,
+    seed: u64,
+    next_id: &mut u64,
+    count: usize,
+    used_names: &[String],
+) -> Vec<ForeignMinister> {
+    let mut rng = ChaCha8Rng::seed_from_u64(seed ^ 0x4D49_4E49_5354_4552);
+    let mut existing = used_names.to_vec();
+    let mut out = Vec::with_capacity(count);
+
+    for idx in 0..count {
+        let profile = generate_single_leader(country_id, false, &mut rng, &existing);
+        existing.push(profile.full_name.clone());
+
+        let spec_idx = (idx + rng.random_range(0..MINISTER_SPECIALTIES.len()))
+            % MINISTER_SPECIALTIES.len();
+        let specialty = MINISTER_SPECIALTIES[spec_idx].to_string();
+
+        // Estadísticas aleatorias con sesgo ligero por especialidad para variedad real
+        let mut relation_boost_pct = rng.random_range(16.0_f64..=52.0_f64);
+        let mut peace_treaty_chance_pct = rng.random_range(36.0_f64..=86.0_f64);
+        let mut white_peace_chance_pct = rng.random_range(44.0_f64..=92.0_f64);
+        let mut alliance_chance_pct = rng.random_range(28.0_f64..=82.0_f64);
+        let mut non_aggression_chance_pct = rng.random_range(42.0_f64..=90.0_f64);
+
+        match spec_idx {
+            0 => {
+                peace_treaty_chance_pct = (peace_treaty_chance_pct + 9.0).min(95.0);
+                white_peace_chance_pct = (white_peace_chance_pct + 8.0).min(96.0);
+            }
+            1 => {
+                alliance_chance_pct = (alliance_chance_pct + 10.0).min(94.0);
+                non_aggression_chance_pct = (non_aggression_chance_pct + 5.0).min(95.0);
+            }
+            2 => {
+                non_aggression_chance_pct = (non_aggression_chance_pct + 9.0).min(96.0);
+                relation_boost_pct = (relation_boost_pct + 8.0).min(65.0);
+            }
+            _ => {
+                relation_boost_pct = (relation_boost_pct + 12.0).min(68.0);
+                alliance_chance_pct = (alliance_chance_pct + 5.0).min(90.0);
+            }
+        }
+
+        let id = *next_id;
+        *next_id = next_id.saturating_add(1);
+
+        out.push(ForeignMinister {
+            id,
+            profile,
+            specialty,
+            stats: ForeignMinisterStats {
+                relation_boost_pct: round1(relation_boost_pct),
+                peace_treaty_chance_pct: round1(peace_treaty_chance_pct),
+                white_peace_chance_pct: round1(white_peace_chance_pct),
+                alliance_chance_pct: round1(alliance_chance_pct),
+                non_aggression_chance_pct: round1(non_aggression_chance_pct),
+            },
+        });
+    }
+
+    out
+}
+
+/// Inicializa las ternas de candidatos a Ministro de Relaciones Exteriores por país.
+/// Deja `foreign_minister = None` para que el jugador asigne manualmente a su Canciller.
+pub fn assign_initial_minister_pools(
+    countries: &mut BTreeMap<String, CountryState>,
+    seed: u64,
+    next_minister_id: &mut u64,
+) {
+    for (idx, (cid, country)) in countries.iter_mut().enumerate() {
+        let mut used: Vec<String> = country
+            .political_parties
+            .iter()
+            .map(|p| p.leader.full_name.clone())
+            .collect();
+        let country_seed = seed
+            ^ ((idx as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15))
+            ^ cid.bytes().fold(0_u64, |acc, b| acc.rotate_left(7) ^ (b as u64));
+        let candidates = generate_minister_candidates(cid, country_seed, next_minister_id, 4, &used);
+        for c in &candidates {
+            used.push(c.profile.full_name.clone());
+        }
+        country.minister_candidates = candidates;
+        country.foreign_minister = None;
+    }
 }

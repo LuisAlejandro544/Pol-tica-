@@ -8,13 +8,17 @@
 pub mod leaders;
 
 use crate::ai::{apply_ai_decisions, evaluate_ai_countries, find_province_route, process_elections};
-use crate::lua_bridge::LuaEngine;
+use crate::lua_bridge::{LuaEngine, LuaEventContext, LuaStepContext};
 use crate::models::{
-    ArchivedStockSample, ArmyUnit, CampaignThumbnail, CompanyCategoryTemplate, CompanyEntity,
-    Difficulty, GameState, MacroHistorySnapshot, PlayerAction, ProvinceGraph, ProvinceNode,
+    ArchivedStockSample, ArmyUnit, CampaignThumbnail, CompanyCategory, CompanyCategoryTemplate,
+    CompanyEntity, Difficulty, ForeignMinister, GameState, GlobalMacroCycle, MacroHistorySnapshot,
+    MinisterMissionKind, PlayerAction, ProvinceGraph, ProvinceNode,
 };
 use crossbeam_channel::{Receiver, Sender};
-use leaders::assign_random_leaders_to_countries;
+use leaders::{
+    assign_initial_minister_pools, assign_random_leaders_to_countries,
+    generate_minister_candidates,
+};
 use rand::{rngs::ChaCha8Rng, RngExt, SeedableRng};
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -230,7 +234,62 @@ pub fn ensure_fallback_graph(countries: &BTreeMap<String, crate::models::Country
     }
 }
 
-/// Aplica una acción militar del jugador sobre el `GameState` (reclutar o mover unidad).
+/// Calcula cuántos puntos de opinión bilateral aporta inmediatamente una misión de mejora de relaciones.
+pub fn compute_minister_relation_gain(minister: &ForeignMinister) -> f64 {
+    let raw = 10.0 * (1.0 + minister.stats.relation_boost_pct / 100.0);
+    (raw * 10.0).round() / 10.0
+}
+
+/// Calcula la probabilidad efectiva (0..100) de que el país objetivo acepte de inmediato
+/// una misión enviada por el Ministro de Relaciones Exteriores asignado (0 días de espera).
+pub fn compute_minister_mission_chance_pct(
+    state: &GameState,
+    minister: &ForeignMinister,
+    player_id: &str,
+    target_id: &str,
+    mission: MinisterMissionKind,
+) -> f64 {
+    let rel = state.get_relation(player_id, target_id);
+    let my_power = state
+        .countries
+        .get(player_id)
+        .map(|c| c.military_power_score())
+        .unwrap_or(10.0);
+    let their_power = state
+        .countries
+        .get(target_id)
+        .map(|c| c.military_power_score())
+        .unwrap_or(10.0)
+        .max(1.0);
+    let power_ratio = (my_power / their_power).clamp(0.4, 2.2);
+
+    match mission {
+        MinisterMissionKind::ImproveRelations => 100.0,
+        MinisterMissionKind::ProposeNonAggression => {
+            let opinion_mod = rel.opinion * 0.18;
+            let trade_bonus = if rel.trade_pact { 5.0 } else { 0.0 };
+            (minister.stats.non_aggression_chance_pct + opinion_mod + trade_bonus).clamp(8.0, 96.0)
+        }
+        MinisterMissionKind::ProposeAlliance => {
+            let opinion_mod = (rel.opinion - 20.0) * 0.25;
+            let pact_bonus = (if rel.trade_pact { 5.0 } else { 0.0 })
+                + (if rel.non_aggression_pact { 7.0 } else { 0.0 });
+            (minister.stats.alliance_chance_pct + opinion_mod + pact_bonus).clamp(5.0, 95.0)
+        }
+        MinisterMissionKind::ProposePeaceTreaty => {
+            let mil_mod = (power_ratio - 1.0) * 14.0;
+            let opinion_mod = rel.opinion * 0.12;
+            (minister.stats.peace_treaty_chance_pct + mil_mod + opinion_mod).clamp(8.0, 96.0)
+        }
+        MinisterMissionKind::ProposeWhitePeace => {
+            let mil_mod = (power_ratio - 1.0) * 10.0;
+            let opinion_mod = rel.opinion * 0.08;
+            (minister.stats.white_peace_chance_pct + mil_mod + opinion_mod).clamp(10.0, 97.0)
+        }
+    }
+}
+
+/// Aplica una acción del jugador sobre el `GameState` (militar o diplomática instantánea sin consumir días).
 pub fn apply_player_action(
     state: &mut GameState,
     graph: &ProvinceGraph,
@@ -325,6 +384,284 @@ pub fn apply_player_action(
                 format!("{} inicia marcha hacia {}.", unit.name, dest_label),
             );
         }
+        PlayerAction::AssignForeignMinister {
+            country_id,
+            candidate_id,
+        } => {
+            let assigned = if let Some(c) = state.countries.get_mut(country_id) {
+                if let Some(pos) = c.minister_candidates.iter().position(|m| m.id == *candidate_id) {
+                    let chosen = c.minister_candidates.remove(pos);
+                    if let Some(prev) = c.foreign_minister.replace(chosen.clone()) {
+                        c.minister_candidates.push(prev);
+                    }
+                    Some(chosen)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            if let Some(m) = assigned {
+                let msg = format!(
+                    "Canciller asignado en 0 días: {} ({}, {} años).",
+                    m.profile.full_name, m.specialty, m.profile.age
+                );
+                state.last_diplomacy_feedback = Some((true, msg.clone()));
+                state.push_chronicle(country_id.clone(), msg);
+            }
+        }
+        PlayerAction::RefreshMinisterCandidates { country_id, seed } => {
+            let mut next_id = state.next_minister_id.max(1);
+            if let Some(c) = state.countries.get_mut(country_id) {
+                let mut used: Vec<String> = c
+                    .political_parties
+                    .iter()
+                    .map(|p| p.leader.full_name.clone())
+                    .collect();
+                if let Some(curr) = &c.foreign_minister {
+                    used.push(curr.profile.full_name.clone());
+                }
+                c.minister_candidates =
+                    generate_minister_candidates(country_id, *seed, &mut next_id, 4, &used);
+                state.last_diplomacy_feedback = Some((
+                    true,
+                    "Nueva terna de candidatos a Ministro de Relaciones Exteriores disponible."
+                        .to_string(),
+                ));
+            }
+            state.next_minister_id = next_id;
+        }
+        PlayerAction::ExecuteMinisterMission {
+            player_country_id,
+            target_country_id,
+            mission,
+            roll_seed,
+        } => {
+            let Some(minister) = state
+                .countries
+                .get(player_country_id)
+                .and_then(|c| c.foreign_minister.clone())
+            else {
+                state.last_diplomacy_feedback = Some((
+                    false,
+                    "Debes asignar primero un Ministro de Relaciones Exteriores.".to_string(),
+                ));
+                return;
+            };
+            let target_name = state
+                .countries
+                .get(target_country_id)
+                .map(|c| c.name.clone())
+                .unwrap_or_else(|| target_country_id.clone());
+
+            let chance_pct = compute_minister_mission_chance_pct(
+                state,
+                &minister,
+                player_country_id,
+                target_country_id,
+                *mission,
+            );
+            let mut rng = ChaCha8Rng::seed_from_u64(*roll_seed);
+            let roll_val = rng.random_range(0.0_f64..100.0_f64);
+            let accepted = roll_val < chance_pct;
+
+            let key = GameState::ordered_pair(player_country_id, target_country_id);
+            let rel = state.relations.entry(key).or_default();
+
+            let (ok, summary) = match mission {
+                MinisterMissionKind::ImproveRelations => {
+                    let gain = compute_minister_relation_gain(&minister);
+                    rel.opinion = (rel.opinion + gain).min(100.0);
+                    (
+                        true,
+                        format!(
+                            "Misión completada al instante (0 días): {} mejoró relaciones con {} (+{:.1} opinión, +{:.0}% bono ministerial).",
+                            minister.profile.full_name,
+                            target_name,
+                            gain,
+                            minister.stats.relation_boost_pct
+                        ),
+                    )
+                }
+                MinisterMissionKind::ProposeNonAggression => {
+                    if rel.at_war {
+                        (
+                            false,
+                            format!(
+                                "No se puede firmar Pacto de No Agresión mientras exista guerra con {target_name}."
+                            ),
+                        )
+                    } else if accepted {
+                        rel.non_aggression_pact = true;
+                        rel.opinion = (rel.opinion + 8.0).min(100.0);
+                        (
+                            true,
+                            format!(
+                                "ÉXITO ({chance_pct:.0}% • 0 días): {} selló un Pacto de No Agresión con {}.",
+                                minister.profile.full_name, target_name
+                            ),
+                        )
+                    } else {
+                        rel.opinion = (rel.opinion - 2.0).max(-100.0);
+                        (
+                            false,
+                            format!(
+                                "RECHAZADO ({chance_pct:.0}% • 0 días): {} declinó el Pacto de No Agresión propuesto por {}.",
+                                target_name, minister.profile.full_name
+                            ),
+                        )
+                    }
+                }
+                MinisterMissionKind::ProposeAlliance => {
+                    if rel.at_war {
+                        (
+                            false,
+                            format!(
+                                "No es posible pactar una Alianza en estado de guerra con {target_name}."
+                            ),
+                        )
+                    } else if accepted {
+                        rel.alliance = true;
+                        rel.non_aggression_pact = true;
+                        rel.opinion = (rel.opinion + 15.0).min(100.0);
+                        (
+                            true,
+                            format!(
+                                "ÉXITO ({chance_pct:.0}% • 0 días): {} logró una Alianza Estratégica con {}.",
+                                minister.profile.full_name, target_name
+                            ),
+                        )
+                    } else {
+                        rel.opinion = (rel.opinion - 3.0).max(-100.0);
+                        (
+                            false,
+                            format!(
+                                "RECHAZADO ({chance_pct:.0}% • 0 días): {} rechazó la propuesta de Alianza de {}.",
+                                target_name, minister.profile.full_name
+                            ),
+                        )
+                    }
+                }
+                MinisterMissionKind::ProposePeaceTreaty => {
+                    if !rel.at_war {
+                        (
+                            false,
+                            format!("No existe conflicto bélico activo con {target_name}."),
+                        )
+                    } else if accepted {
+                        rel.at_war = false;
+                        rel.non_aggression_pact = true;
+                        rel.opinion = (rel.opinion + 20.0).clamp(-100.0, 100.0);
+                        (
+                            true,
+                            format!(
+                                "ACUERDO DE PAZ ({chance_pct:.0}% • 0 días): {} negoció el fin de la guerra y tregua con {}.",
+                                minister.profile.full_name, target_name
+                            ),
+                        )
+                    } else {
+                        (
+                            false,
+                            format!(
+                                "RECHAZADO ({chance_pct:.0}% • 0 días): {} rechazó el Acuerdo de Paz de {}.",
+                                target_name, minister.profile.full_name
+                            ),
+                        )
+                    }
+                }
+                MinisterMissionKind::ProposeWhitePeace => {
+                    if !rel.at_war {
+                        (
+                            false,
+                            format!("No existe conflicto bélico activo con {target_name}."),
+                        )
+                    } else if accepted {
+                        rel.at_war = false;
+                        rel.opinion = (rel.opinion + 10.0).clamp(-100.0, 100.0);
+                        (
+                            true,
+                            format!(
+                                "PAZ BLANCA ({chance_pct:.0}% • 0 días): {} cerró una Paz Blanca sin condiciones con {}.",
+                                minister.profile.full_name, target_name
+                            ),
+                        )
+                    } else {
+                        (
+                            false,
+                            format!(
+                                "RECHAZADO ({chance_pct:.0}% • 0 días): {} no aceptó la Paz Blanca enviada por {}.",
+                                target_name, minister.profile.full_name
+                            ),
+                        )
+                    }
+                }
+            };
+
+            state.last_diplomacy_feedback = Some((ok, summary.clone()));
+            state.push_chronicle(player_country_id.clone(), summary);
+        }
+        PlayerAction::SignTradePact {
+            player_country_id,
+            target_country_id,
+        } => {
+            let target_name = state
+                .countries
+                .get(target_country_id)
+                .map(|c| c.name.clone())
+                .unwrap_or_else(|| target_country_id.clone());
+            let key = GameState::ordered_pair(player_country_id, target_country_id);
+            let rel = state.relations.entry(key).or_default();
+            if !rel.at_war && rel.opinion >= 20.0 {
+                rel.trade_pact = true;
+                rel.opinion = (rel.opinion + 10.0).min(100.0);
+                let msg = format!("Tratado comercial firmado con {target_name}.");
+                state.last_diplomacy_feedback = Some((true, msg.clone()));
+                state.push_chronicle(player_country_id.clone(), msg);
+            }
+        }
+        PlayerAction::IssueSanction {
+            player_country_id,
+            target_country_id,
+        } => {
+            let target_name = state
+                .countries
+                .get(target_country_id)
+                .map(|c| c.name.clone())
+                .unwrap_or_else(|| target_country_id.clone());
+            let key = GameState::ordered_pair(player_country_id, target_country_id);
+            let rel = state.relations.entry(key).or_default();
+            rel.opinion = (rel.opinion - 20.0).max(-100.0);
+            rel.alliance = false;
+            rel.trade_pact = false;
+            rel.non_aggression_pact = false;
+            let msg = format!("Tensión diplomática y sanciones emitidas hacia {target_name}.");
+            state.last_diplomacy_feedback = Some((false, msg.clone()));
+            state.push_chronicle(player_country_id.clone(), msg);
+        }
+        PlayerAction::DeclareWar {
+            player_country_id,
+            target_country_id,
+        } => {
+            let target_name = state
+                .countries
+                .get(target_country_id)
+                .map(|c| c.name.clone())
+                .unwrap_or_else(|| target_country_id.clone());
+            let key = GameState::ordered_pair(player_country_id, target_country_id);
+            let rel = state.relations.entry(key).or_default();
+            if !rel.at_war {
+                rel.at_war = true;
+                rel.alliance = false;
+                rel.trade_pact = false;
+                rel.non_aggression_pact = false;
+                rel.opinion = (rel.opinion - 45.0).max(-100.0);
+                let msg = format!(
+                    "¡Estado de guerra declarado contra {target_name}! Puedes negociar Acuerdo de Paz o Paz Blanca con tu Ministro."
+                );
+                state.last_diplomacy_feedback = Some((false, msg.clone()));
+                state.push_chronicle(player_country_id.clone(), msg);
+            }
+        }
     }
 }
 
@@ -346,6 +683,7 @@ fn build_initial_state(lua: &LuaEngine, difficulty: Difficulty) -> Result<GameSt
                 crate::models::DiplomaticRelation {
                     opinion: if is_neighbor { 25.0 } else { 10.0 },
                     trade_pact: is_neighbor && (i + j) % 3 == 0,
+                    non_aggression_pact: false,
                     alliance: false,
                     at_war: false,
                 },
@@ -357,6 +695,8 @@ fn build_initial_state(lua: &LuaEngine, difficulty: Difficulty) -> Result<GameSt
 
     let seed = generate_runtime_seed("PREVIEW");
     assign_random_leaders_to_countries(&mut countries, seed);
+    let mut next_minister_id = 1_u64;
+    assign_initial_minister_pools(&mut countries, seed ^ 0x4D49_4E49, &mut next_minister_id);
     let mut state = GameState {
         campaign_seed: seed,
         total_days: 1,
@@ -378,6 +718,11 @@ fn build_initial_state(lua: &LuaEngine, difficulty: Difficulty) -> Result<GameSt
         next_company_id: 1,
         active_event: None,
         chronicle: Vec::new(),
+        global_cycle: GlobalMacroCycle::default(),
+        last_event_id: None,
+        last_event_day: 0,
+        next_minister_id,
+        last_diplomacy_feedback: None,
         pending_chronicle_archive: Vec::new(),
         pending_stock_archive: Vec::new(),
         pending_macro_archive: Vec::new(),
@@ -439,8 +784,13 @@ fn configure_campaign_for_country(
         companies_founded: 0,
     });
 
-    // Asignar aleatoriamente Presidente y líderes de oposición (nombre, edad y nacionalidad) para jugador e IA
+    // Asignar aleatoriamente Presidente, líderes de oposición y ternas de Ministros de Relaciones
     assign_random_leaders_to_countries(&mut state.countries, seed ^ 0x9911_2026);
+    assign_initial_minister_pools(
+        &mut state.countries,
+        seed ^ 0x4D49_4E49_2026,
+        &mut state.next_minister_id,
+    );
 
     // Asegura nodos de respaldo en memoria para cualquier país sin malla cargada aún
     let mut working_graph = graph.clone();
@@ -488,6 +838,12 @@ fn configure_campaign_for_country(
 
     recompute_country_balances(&mut state.countries);
     state.sync_country_troop_totals();
+    for country in state.countries.values_mut() {
+        let monthly_def =
+            (country.economy.gdp_usd_millions / 12.0) * (country.military.defense_budget_pct / 100.0);
+        country.military.ai_military_budget_m = (monthly_def * 0.65).clamp(40.0, 420.0);
+        country.military.last_ai_recruit_day = 0;
+    }
 
     let player_units = state
         .units
@@ -747,18 +1103,49 @@ fn advance_single_day(
         apply_ai_decisions(state, graph, ai_decisions);
     }
 
-    // 6. Al cambiar de mes: reglas macroeconómicas en Lua 5.4, elecciones y eventos
+    // 6. Al cambiar de mes: ciclo global, reglas macroeconómicas/parlamentarias en Lua 5.4, elecciones y eventos
     if new_month {
+        step_global_macro_cycle(state);
+
         let ids: Vec<String> = state.countries.keys().cloned().collect();
         for id in ids {
             let corp_gdp = state.country_company_gdp_bonus(&id);
+            let corp_export = state.country_company_export_bonus(&id);
             let corp_jobs = state.country_company_jobs(&id);
+            let trade_pacts_count = state.country_trade_pacts_count(&id);
+            let at_war = state.country_at_war(&id);
+            let global_cycle_snapshot = state.global_cycle.clone();
+
             if let Some(country) = state.countries.get_mut(&id) {
                 // Preservamos la tesorería diaria para no duplicar el cobro mensual en Lua
                 let daily_treasury = country.economy.treasury_usd_millions;
-                lua.step_country_via_lua(country, corp_gdp, corp_jobs)
+                let step_ctx = LuaStepContext {
+                    corporate_gdp_bonus_m: corp_gdp,
+                    corporate_export_bonus_m: corp_export,
+                    corporate_jobs_total: corp_jobs,
+                    trade_pacts_count,
+                    at_war,
+                    global_cycle: &global_cycle_snapshot,
+                };
+                lua.step_country_via_lua(country, &step_ctx)
                     .map_err(|e| format!("Error ejecutando reglas Lua para {id}: {e}"))?;
                 country.economy.treasury_usd_millions = daily_treasury;
+
+                // Recarga mensual del presupuesto militar disponible para reclutamiento de la IA
+                let monthly_gdp = country.economy.gdp_usd_millions / 12.0;
+                let defense_alloc = monthly_gdp * (country.military.defense_budget_pct / 100.0);
+                let fiscal_factor = if country.economy.last_monthly_balance >= 0.0 {
+                    1.0
+                } else if country.economy.last_monthly_balance > -(monthly_gdp * 0.008) {
+                    0.55
+                } else {
+                    0.20
+                };
+                let recruit_share = if at_war { 0.55 } else { 0.35 };
+                let monthly_topup = defense_alloc * recruit_share * fiscal_factor;
+                let budget_cap = (defense_alloc * if at_war { 3.5 } else { 2.5 }).max(140.0);
+                country.military.ai_military_budget_m =
+                    (country.military.ai_military_budget_m + monthly_topup).min(budget_cap);
             }
         }
 
@@ -778,14 +1165,49 @@ fn advance_single_day(
         }
         save_player_campaign_thumbnail(state);
 
-        if state.active_event.is_none()
-            && state.player_country_id.is_some()
-            && state.month % 4 == 0
-        {
-            let ev = lua
-                .pick_event(state.total_days, state.countries.len() as u64)
-                .map_err(|e| format!("Error generando evento Lua: {e}"))?;
-            state.active_event = Some(ev);
+        // Evaluación contextual de eventos por causas reales (nunca % 4)
+        if state.active_event.is_none() {
+            if let Some(pid) = state.player_country_id.clone() {
+                if let Some(player_c) = state.countries.get(&pid) {
+                    let severe_trigger = player_c.stability < 42.0
+                        || player_c.economy.inflation_pct > 15.0
+                        || player_c.economy.country_risk_bps > 750.0;
+                    let min_cooldown = if severe_trigger { 45 } else { 85 };
+                    if state.total_days.saturating_sub(state.last_event_day) >= min_cooldown {
+                        let company_count =
+                            state.companies.iter().filter(|c| c.country_id == pid).count();
+                        let dominant_sector = state
+                            .companies
+                            .iter()
+                            .filter(|c| c.country_id == pid)
+                            .max_by(|a, b| {
+                                a.annual_gdp_contribution_m
+                                    .partial_cmp(&b.annual_gdp_contribution_m)
+                                    .unwrap_or(std::cmp::Ordering::Equal)
+                            })
+                            .map(|c| c.category.label())
+                            .unwrap_or("Industria y Servicios");
+                        let at_war = state.country_at_war(&pid);
+                        let ev_ctx = LuaEventContext {
+                            country: player_c,
+                            company_count,
+                            dominant_sector,
+                            at_war,
+                            global_cycle: &state.global_cycle,
+                            last_event_id: state.last_event_id.as_deref(),
+                            total_days: state.total_days,
+                        };
+                        if let Some(ev) = lua
+                            .pick_contextual_event(&ev_ctx)
+                            .map_err(|e| format!("Error generando evento Lua: {e}"))?
+                        {
+                            state.last_event_id = Some(ev.id.clone());
+                            state.last_event_day = state.total_days;
+                            state.active_event = Some(ev);
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -799,6 +1221,37 @@ fn advance_single_day(
     }
 
     Ok(())
+}
+
+fn step_global_macro_cycle(state: &mut GameState) {
+    let phase = (state.total_days as f64) / 180.0;
+    let seed_offset = ((state.campaign_seed % 360) as f64).to_radians();
+    let wave_fed = (phase * 0.55 + seed_offset).sin();
+    let wave_comm = (phase * 0.42 + seed_offset * 1.7).cos();
+
+    let mut rng = ChaCha8Rng::seed_from_u64(
+        state
+            .campaign_seed
+            .wrapping_add(state.total_days.wrapping_mul(0x9E37_79B9)),
+    );
+    let fed_target = (4.10 + wave_fed * 1.45 + rng.random_range(-0.20_f64..=0.20_f64)).clamp(1.75, 6.25);
+    let comm_target =
+        (100.0 + wave_comm * 16.0 + rng.random_range(-2.5_f64..=2.5_f64)).clamp(76.0, 128.0);
+
+    state.global_cycle.fed_rate_pct =
+        (state.global_cycle.fed_rate_pct * 0.72 + fed_target * 0.28).clamp(1.75, 6.25);
+    state.global_cycle.commodity_index =
+        (state.global_cycle.commodity_index * 0.75 + comm_target * 0.25).clamp(76.0, 128.0);
+
+    state.global_cycle.cycle_label = if state.global_cycle.commodity_index >= 107.0 {
+        "Auge Materias Primas".to_string()
+    } else if state.global_cycle.fed_rate_pct >= 5.0 {
+        "Restricción Financiera".to_string()
+    } else if state.global_cycle.fed_rate_pct <= 3.1 && state.global_cycle.commodity_index >= 98.0 {
+        "Expansión Global".to_string()
+    } else {
+        "Equilibrio Global".to_string()
+    };
 }
 
 fn save_player_campaign_thumbnail(state: &GameState) {
@@ -874,6 +1327,22 @@ fn step_unit_movements(state: &mut GameState, graph: &ProvinceGraph) {
             })
             .unwrap_or((unit.world_pos, 0.2, unit.country_id.clone(), target_mesh.clone()));
 
+        let has_access = if dest_owner == unit.country_id {
+            true
+        } else {
+            let rel = relations
+                .get(&GameState::ordered_pair(&unit.country_id, &dest_owner))
+                .cloned()
+                .unwrap_or_default();
+            rel.alliance || rel.at_war
+        };
+        if !has_access {
+            unit.target_province = None;
+            unit.route_queue.clear();
+            unit.march_progress = 0.0;
+            continue;
+        }
+
         let terrain_factor = (1.0 + elev * 0.45).clamp(1.0, 2.2) as f32;
         let speed_per_day = 0.30 / terrain_factor;
         unit.march_progress = (unit.march_progress + speed_per_day).min(1.0);
@@ -932,26 +1401,35 @@ fn step_companies_and_stocks(
         ^ 0xA5A5_5A5A;
     let mut rng = ChaCha8Rng::seed_from_u64(day_seed);
 
-    // 1. Actualización diaria del precio de acción de cada empresa según macroeconomía del país
+    let mut pact_counts: BTreeMap<String, u32> = BTreeMap::new();
+    for cid in state.countries.keys() {
+        pact_counts.insert(cid.clone(), state.country_trade_pacts_count(cid));
+    }
+    let commodity_factor = (state.global_cycle.commodity_index - 100.0) / 100.0;
+
+    // 1. Ciclo bidireccional diario: bolsa, salud financiera, expansión o recorte/quiebra
     let mut evicted_stocks: Vec<ArchivedStockSample> = Vec::new();
+    let mut unemp_adjustments: Vec<(String, f64, f64)> = Vec::new();
+    let mut bankrupt_indices: Vec<usize> = Vec::new();
     let current_day = state.total_days;
-    for comp in &mut state.companies {
+
+    for (idx, comp) in state.companies.iter_mut().enumerate() {
         let Some(c) = state.countries.get(&comp.country_id) else {
             continue;
         };
         comp.prev_share_price = comp.share_price;
 
-        let growth_drift = (c.economy.gdp_growth_pct - 1.8) * 0.0018;
-        let inflation_drag = (c.economy.inflation_pct - 5.5).max(0.0)
-            * 0.0007
+        let real_rate = c.economy.interest_rate_pct - c.economy.inflation_pct;
+        let growth_drift = (c.economy.gdp_growth_pct - 1.8) * 0.0020;
+        let inflation_drag = (c.economy.inflation_pct - 6.0).max(0.0)
+            * 0.00075
             * comp.inflation_sensitivity;
-        let rate_effect = -(c.economy.interest_rate_pct - 7.0)
-            * 0.0005
-            * comp.rate_sensitivity;
+        let rate_effect = -((real_rate - 3.0).max(0.0) * 0.00075 * comp.rate_sensitivity);
         let stability_drift = (c.stability - 55.0) * 0.00018;
-        let noise = rng.random_range(-0.022_f64..=0.022_f64);
+        let export_lift = comp.export_share * commodity_factor * 0.0045;
+        let noise = rng.random_range(-0.015_f64..=0.015_f64);
 
-        let pct_change = (growth_drift - inflation_drag + rate_effect + stability_drift + noise)
+        let pct_change = (growth_drift - inflation_drag + rate_effect + stability_drift + export_lift + noise)
             .clamp(-0.06, 0.06);
         comp.share_price = (comp.share_price * (1.0 + pct_change)).clamp(2.5, 2_500.0);
 
@@ -965,8 +1443,103 @@ fn step_companies_and_stocks(
                 share_price: old_price,
             });
         }
+
+        // Evolución bidireccional de la salud financiera corporativa
+        let pacts = pact_counts.get(&comp.country_id).copied().unwrap_or(0) as f64;
+        let macro_health_delta = (c.economy.gdp_growth_pct - 1.6) * 0.22
+            - (real_rate - 5.5).max(0.0) * 0.16 * comp.rate_sensitivity
+            - (c.economy.inflation_pct - 10.0).max(0.0) * 0.08 * comp.inflation_sensitivity
+            - (46.0 - c.stability).max(0.0) * 0.07
+            - (c.economy.tax_rate_pct - 26.0).max(0.0) * 0.06
+            + pacts * 0.05
+            + comp.export_share * commodity_factor * 0.45;
+        comp.financial_health = (comp.financial_health + macro_health_delta).clamp(0.0, 100.0);
+
+        if comp.financial_health <= 10.0 {
+            comp.distress_days += 1;
+        } else if comp.financial_health >= 30.0 {
+            comp.distress_days = comp.distress_days.saturating_sub(1);
+        }
+
+        if comp.distress_days >= 18 {
+            bankrupt_indices.push(idx);
+            continue;
+        }
+
+        // Recorte de personal por estrés o contratación orgánica en auge
+        let workforce = ((c.population as f64) * 0.48).max(120_000.0);
+        if comp.financial_health < 42.0 && current_day % 6 == 0 && comp.employees > 450 {
+            let laid_off = ((comp.employees as f64) * 0.05).round().max(50.0) as u64;
+            let actual_loss = laid_off.min(comp.employees.saturating_sub(350));
+            if actual_loss > 0 {
+                let gdp_per_job = comp.annual_gdp_contribution_m / (comp.employees.max(1) as f64);
+                comp.employees -= actual_loss;
+                comp.annual_gdp_contribution_m = (comp.employees as f64) * gdp_per_job;
+                let unemp_inc = ((actual_loss as f64 / workforce) * 100.0 * 1.25).clamp(0.02, 0.65);
+                unemp_adjustments.push((comp.country_id.clone(), unemp_inc, 0.0));
+            }
+        } else if comp.financial_health > 82.0
+            && c.economy.gdp_growth_pct > 2.3
+            && current_day % 12 == 0
+            && comp.employees < 45_000
+        {
+            let hired = ((comp.employees as f64) * 0.025).round().max(25.0) as u64;
+            let gdp_per_job = comp.annual_gdp_contribution_m / (comp.employees.max(1) as f64);
+            comp.employees += hired;
+            comp.annual_gdp_contribution_m = (comp.employees as f64) * gdp_per_job;
+            let unemp_dec = -((hired as f64 / workforce) * 100.0 * 1.15).clamp(0.01, 0.45);
+            unemp_adjustments.push((comp.country_id.clone(), unemp_dec, 0.0));
+        }
     }
     state.pending_stock_archive.extend(evicted_stocks);
+
+    // Procesar quiebras reales de empresas insolventes
+    if !bankrupt_indices.is_empty() {
+        let mut closed_logs: Vec<(String, String)> = Vec::new();
+        for idx in bankrupt_indices.into_iter().rev() {
+            let comp = state.companies.remove(idx);
+            if let Some(c) = state.countries.get(&comp.country_id) {
+                let workforce = ((c.population as f64) * 0.48).max(120_000.0);
+                let unemp_inc = ((comp.employees as f64 / workforce) * 100.0 * 1.35).clamp(0.05, 1.2);
+                unemp_adjustments.push((
+                    comp.country_id.clone(),
+                    unemp_inc,
+                    -comp.annual_gdp_contribution_m * 0.12,
+                ));
+                closed_logs.push((
+                    comp.country_id.clone(),
+                    format!(
+                        "Quiebra corporativa en {}: {} ({}) cierra tras perder {} empleos.",
+                        c.name,
+                        comp.name,
+                        comp.category.label(),
+                        comp.employees
+                    ),
+                ));
+            }
+        }
+        for (cid, msg) in closed_logs {
+            state.push_chronicle(cid, msg);
+        }
+    }
+
+    for (cid, unemp_delta, gdp_delta) in unemp_adjustments {
+        if let Some(c) = state.countries.get_mut(&cid) {
+            c.economy.unemployment_pct = (c.economy.unemployment_pct + unemp_delta).clamp(2.2, 34.0);
+            if gdp_delta != 0.0 {
+                c.economy.gdp_usd_millions = (c.economy.gdp_usd_millions + gdp_delta).max(100.0);
+            }
+        }
+    }
+
+    // Sincronizar bono corporativo al PIB de cada país tras crecimientos o quiebras
+    let country_ids: Vec<String> = state.countries.keys().cloned().collect();
+    for cid in country_ids {
+        let bonus = state.country_company_gdp_bonus(&cid);
+        if let Some(c) = state.countries.get_mut(&cid) {
+            c.economy.corporate_gdp_bonus_m = bonus;
+        }
+    }
 
     // 2. Cada 5 días de juego, evaluar dinámicamente el nacimiento de nuevas empresas (nunca estático)
     if state.total_days % 5 != 0 || templates.is_empty() || state.companies.len() >= 80 {
@@ -974,11 +1547,11 @@ fn step_companies_and_stocks(
     }
 
     let spawn_prob = if state.companies.len() < 24 {
-        0.78
+        0.74
     } else if state.companies.len() < 48 {
-        0.58
+        0.52
     } else {
-        0.34
+        0.30
     };
     if !rng.random_bool(spawn_prob) {
         return;
@@ -999,19 +1572,19 @@ fn step_companies_and_stocks(
             .iter()
             .filter(|co| co.country_id == cid)
             .count();
-        // Limitar concentración para que sigan brotando en países distintos
         if existing_count >= 7 {
             continue;
         }
-        let score = (20.0
-            + c.stability * 0.55
-            + (c.economy.gdp_growth_pct + 4.0).max(0.5) * 7.5
-            + c.economy.infra_investment_pct * 3.8
-            + c.economy.unemployment_pct * 0.7
-            - (c.economy.inflation_pct - 9.0).max(0.0) * 1.1
-            - (c.economy.tax_rate_pct - 23.0).max(0.0) * 1.3)
+        let real_rate = c.economy.interest_rate_pct - c.economy.inflation_pct;
+        let score = (22.0
+            + c.stability * 0.50
+            + (c.economy.gdp_growth_pct + 3.0).max(0.2) * 7.0
+            + c.economy.infra_investment_pct * 3.5
+            - (real_rate - 4.5).max(0.0) * 2.2
+            - (c.economy.inflation_pct - 10.0).max(0.0) * 1.1
+            - (c.economy.tax_rate_pct - 24.0).max(0.0) * 1.3)
             / ((existing_count as f64) * 0.65 + 1.0);
-        if score > 6.0 {
+        if score > 8.0 {
             weights.push((cid, score * rng.random_range(0.75_f64..=1.35_f64)));
         }
     }
@@ -1033,6 +1606,19 @@ fn step_companies_and_stocks(
 
     let cat_idx = rng.random_range(0..templates.len());
     let _ = try_found_company_in(state, templates, &chosen_cid, &mut rng, cat_idx, true);
+}
+
+fn default_export_share_for(category: CompanyCategory, rng: &mut ChaCha8Rng) -> f64 {
+    let (lo, hi) = match category {
+        CompanyCategory::Agroindustria => (0.42, 0.72),
+        CompanyCategory::Energia => (0.38, 0.68),
+        CompanyCategory::Tecnologia => (0.35, 0.65),
+        CompanyCategory::Manufactura => (0.30, 0.58),
+        CompanyCategory::Logistica => (0.24, 0.48),
+        CompanyCategory::Finanzas => (0.12, 0.30),
+        CompanyCategory::Salud => (0.10, 0.25),
+    };
+    rng.random_range(lo..=hi)
 }
 
 fn try_found_company_in(
@@ -1068,6 +1654,8 @@ fn try_found_company_in(
 
     let initial_price = rng.random_range(tmpl.base_price_min..=tmpl.base_price_max);
     let annual_gdp_contribution_m = (employees as f64) * tmpl.gdp_per_job_m;
+    let export_share = default_export_share_for(tmpl.category, rng);
+    let initial_health = rng.random_range(70.0_f64..=88.0_f64);
 
     let cid = state.next_company_id;
     state.next_company_id += 1;
@@ -1086,6 +1674,9 @@ fn try_found_company_in(
         annual_gdp_contribution_m,
         inflation_sensitivity: tmpl.inflation_sensitivity,
         rate_sensitivity: tmpl.rate_sensitivity,
+        financial_health: initial_health,
+        export_share,
+        distress_days: 0,
     };
     state.companies.push(company);
     let inserted_idx = state.companies.len() - 1;
@@ -1094,10 +1685,10 @@ fn try_found_company_in(
     if let Some(c) = state.countries.get_mut(country_id) {
         let workforce = ((c.population as f64) * 0.48).max(120_000.0);
         let unemp_reduction = ((employees as f64 / workforce) * 100.0 * 1.4).clamp(0.05, 1.4);
-        c.economy.unemployment_pct = (c.economy.unemployment_pct - unemp_reduction).max(2.0);
+        c.economy.unemployment_pct = (c.economy.unemployment_pct - unemp_reduction).max(2.2);
         c.economy.corporate_gdp_bonus_m += annual_gdp_contribution_m;
         c.economy.gdp_usd_millions += annual_gdp_contribution_m * 0.25;
-        c.economy.gdp_growth_pct = (c.economy.gdp_growth_pct + 0.08).min(13.5);
+        c.economy.gdp_growth_pct = (c.economy.gdp_growth_pct + 0.08).min(11.5);
     }
 
     if log_chronicle {

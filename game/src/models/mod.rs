@@ -58,6 +58,40 @@ impl Default for LeaderProfile {
     }
 }
 
+/// Estadísticas aleatorias del Ministro de Relaciones Exteriores (porcentajes 0..100).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForeignMinisterStats {
+    /// Bonificación porcentual extra al mejorar relaciones bilaterales.
+    pub relation_boost_pct: f64,
+    /// Probabilidad base de que acepten un Acuerdo de Paz negociado.
+    pub peace_treaty_chance_pct: f64,
+    /// Probabilidad base de que acepten una Paz Blanca sin condiciones.
+    pub white_peace_chance_pct: f64,
+    /// Probabilidad base de que acepten una Alianza Estratégica.
+    pub alliance_chance_pct: f64,
+    /// Probabilidad base de que acepten un Pacto de No Agresión.
+    pub non_aggression_chance_pct: f64,
+}
+
+/// Ministro de Relaciones Exteriores asignable por el jugador con perfil y estadísticas aleatorias.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForeignMinister {
+    pub id: u64,
+    pub profile: LeaderProfile,
+    pub specialty: String,
+    pub stats: ForeignMinisterStats,
+}
+
+/// Misiones instantáneas (0 días) ejecutables por el Ministro de Relaciones Exteriores asignado.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MinisterMissionKind {
+    ImproveRelations,
+    ProposeNonAggression,
+    ProposeAlliance,
+    ProposePeaceTreaty,
+    ProposeWhitePeace,
+}
+
 /// Partido político dentro del congreso o asamblea de un país.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PoliticalParty {
@@ -90,6 +124,16 @@ pub struct EconomyState {
     pub troop_upkeep_usd_millions: f64,
     pub unemployment_pct: f64,
     pub corporate_gdp_bonus_m: f64,
+    #[serde(default)]
+    pub potential_gdp_growth_pct: f64,
+    #[serde(default)]
+    pub inflation_target_pct: f64,
+    #[serde(default)]
+    pub trade_balance_usd_millions: f64,
+    #[serde(default)]
+    pub country_risk_bps: f64,
+    #[serde(default)]
+    pub corporate_tax_revenue_m: f64,
 }
 
 /// Estado militar y defensa nacional.
@@ -98,6 +142,10 @@ pub struct MilitaryState {
     pub active_troops: u64,
     pub defense_budget_pct: f64,
     pub readiness: f64,
+    #[serde(default)]
+    pub ai_military_budget_m: f64,
+    #[serde(default)]
+    pub last_ai_recruit_day: u64,
 }
 
 /// Unidad o regimiento desplegado en un estado/provincia y desplazable en tiempo real.
@@ -186,6 +234,20 @@ pub struct CompanyEntity {
     pub annual_gdp_contribution_m: f64,
     pub inflation_sensitivity: f64,
     pub rate_sensitivity: f64,
+    #[serde(default = "default_company_health")]
+    pub financial_health: f64,
+    #[serde(default = "default_export_share")]
+    pub export_share: f64,
+    #[serde(default)]
+    pub distress_days: u32,
+}
+
+fn default_company_health() -> f64 {
+    78.0
+}
+
+fn default_export_share() -> f64 {
+    0.32
 }
 
 impl CompanyEntity {
@@ -238,6 +300,24 @@ pub struct CountryState {
     pub neighbors: Vec<String>,
     pub ai_personality: AiPersonality,
     pub months_to_election: u32,
+    #[serde(default)]
+    pub coalition_parties: Vec<String>,
+    #[serde(default)]
+    pub legislative_support_pct: f64,
+    #[serde(default = "default_political_capital")]
+    pub political_capital: f64,
+    #[serde(default)]
+    pub foreign_minister: Option<ForeignMinister>,
+    #[serde(default)]
+    pub minister_candidates: Vec<ForeignMinister>,
+}
+
+fn default_political_capital() -> f64 {
+    45.0
+}
+
+fn default_next_minister_id() -> u64 {
+    1
 }
 
 impl CountryState {
@@ -252,6 +332,17 @@ impl CountryState {
     /// Devuelve el partido gobernante actual, si existe.
     pub fn ruling_party(&self) -> Option<&PoliticalParty> {
         self.political_parties.iter().find(|p| p.is_ruling)
+    }
+
+    /// Calcula los escaños sumados del partido de gobierno más sus aliados de coalición en el Congreso.
+    pub fn compute_legislative_support_pct(&self) -> f64 {
+        let sum: f64 = self
+            .political_parties
+            .iter()
+            .filter(|p| p.is_ruling || self.coalition_parties.iter().any(|ac| ac == &p.acronym))
+            .map(|p| p.seats_pct)
+            .sum();
+        sum.clamp(0.0, 100.0)
     }
 
     /// Devuelve el perfil del Presidente en ejercicio (líder del partido gobernante).
@@ -286,6 +377,8 @@ impl CountryState {
 pub struct DiplomaticRelation {
     pub opinion: f64, // -100.0 a +100.0
     pub trade_pact: bool,
+    #[serde(default)]
+    pub non_aggression_pact: bool,
     pub alliance: bool,
     pub at_war: bool,
 }
@@ -295,6 +388,7 @@ impl Default for DiplomaticRelation {
         Self {
             opinion: 15.0,
             trade_pact: false,
+            non_aggression_pact: false,
             alliance: false,
             at_war: false,
         }
@@ -399,6 +493,50 @@ pub enum PlayerAction {
         unit_id: u64,
         target_province: String,
     },
+    AssignForeignMinister {
+        country_id: String,
+        candidate_id: u64,
+    },
+    RefreshMinisterCandidates {
+        country_id: String,
+        seed: u64,
+    },
+    ExecuteMinisterMission {
+        player_country_id: String,
+        target_country_id: String,
+        mission: MinisterMissionKind,
+        roll_seed: u64,
+    },
+    SignTradePact {
+        player_country_id: String,
+        target_country_id: String,
+    },
+    IssueSanction {
+        player_country_id: String,
+        target_country_id: String,
+    },
+    DeclareWar {
+        player_country_id: String,
+        target_country_id: String,
+    },
+}
+
+/// Ciclo macroeconómico global (tasa externa de referencia y materias primas) compartido por Latam.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GlobalMacroCycle {
+    pub fed_rate_pct: f64,
+    pub commodity_index: f64,
+    pub cycle_label: String,
+}
+
+impl Default for GlobalMacroCycle {
+    fn default() -> Self {
+        Self {
+            fed_rate_pct: 4.25,
+            commodity_index: 100.0,
+            cycle_label: "Equilibrio Global".to_string(),
+        }
+    }
 }
 
 /// Estado global completo de la partida en memoria (simulación continua en tiempo real).
@@ -424,6 +562,16 @@ pub struct GameState {
     pub next_company_id: u64,
     pub active_event: Option<GameEvent>,
     pub chronicle: Vec<ChronicleEntry>,
+    #[serde(default)]
+    pub global_cycle: GlobalMacroCycle,
+    #[serde(default)]
+    pub last_event_id: Option<String>,
+    #[serde(default)]
+    pub last_event_day: u64,
+    #[serde(default = "default_next_minister_id")]
+    pub next_minister_id: u64,
+    #[serde(skip)]
+    pub last_diplomacy_feedback: Option<(bool, String)>,
     #[serde(skip)]
     pub pending_chronicle_archive: Vec<ChronicleEntry>,
     #[serde(skip)]
@@ -446,6 +594,7 @@ impl GameState {
             return DiplomaticRelation {
                 opinion: 100.0,
                 trade_pact: true,
+                non_aggression_pact: true,
                 alliance: true,
                 at_war: false,
             };
@@ -503,6 +652,27 @@ impl GameState {
             .filter(|c| c.country_id == country_id)
             .map(|c| c.annual_gdp_contribution_m)
             .sum()
+    }
+
+    pub fn country_company_export_bonus(&self, country_id: &str) -> f64 {
+        self.companies
+            .iter()
+            .filter(|c| c.country_id == country_id)
+            .map(|c| c.annual_gdp_contribution_m * c.export_share * (c.financial_health / 80.0))
+            .sum()
+    }
+
+    pub fn country_trade_pacts_count(&self, country_id: &str) -> u32 {
+        self.relations
+            .iter()
+            .filter(|((a, b), rel)| rel.trade_pact && (a == country_id || b == country_id))
+            .count() as u32
+    }
+
+    pub fn country_at_war(&self, country_id: &str) -> bool {
+        self.relations
+            .iter()
+            .any(|((a, b), rel)| rel.at_war && (a == country_id || b == country_id))
     }
 
     pub fn sync_country_troop_totals(&mut self) {

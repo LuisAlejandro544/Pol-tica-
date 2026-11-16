@@ -26,7 +26,9 @@ use crate::ui::components::chrome::{
 use crate::ui::components::map_canvas::MapViewportState;
 use crate::ui::screens::companies_screen::{render_companies_screen, CompaniesViewState};
 use crate::ui::screens::country_select::{render_country_select, CountrySelectAction};
-use crate::ui::screens::diplomacy_screen::render_diplomacy_screen;
+use crate::ui::screens::diplomacy_screen::{
+    render_diplomacy_screen, render_minister_assign_popup,
+};
 use crate::ui::screens::economy_screen::render_economy_screen;
 use crate::ui::screens::loading_screen::{
     render_campaign_loading_screen, CampaignLoadingState, LoadingScreenAction,
@@ -60,6 +62,7 @@ pub struct HorizonteLatamApp {
     pub campaign_loading: CampaignLoadingState,
     pub selected_difficulty: Difficulty,
     pub show_country_popup: bool,
+    pub show_minister_popup: bool,
     pub last_tick_instant: Instant,
     pub last_frame_instant: Instant,
     pub day_accumulator: f64,
@@ -182,6 +185,11 @@ impl HorizonteLatamApp {
             next_company_id: 1,
             active_event: None,
             chronicle: Vec::new(),
+            global_cycle: crate::models::GlobalMacroCycle::default(),
+            last_event_id: None,
+            last_event_day: 0,
+            next_minister_id: 1,
+            last_diplomacy_feedback: None,
             pending_chronicle_archive: Vec::new(),
             pending_stock_archive: Vec::new(),
             pending_macro_archive: Vec::new(),
@@ -205,6 +213,7 @@ impl HorizonteLatamApp {
             campaign_loading: CampaignLoadingState::default(),
             selected_difficulty: Difficulty::Normal,
             show_country_popup: false,
+            show_minister_popup: false,
             last_tick_instant: now,
             last_frame_instant: now,
             day_accumulator: 0.0,
@@ -267,6 +276,7 @@ impl HorizonteLatamApp {
                     let prev_paused = self.state.paused;
                     let prev_speed = self.state.speed_level;
                     let prev_diff = self.state.difficulty;
+                    let prev_diplomacy_feedback = self.state.last_diplomacy_feedback.take();
                     let ui_chronicle_spool =
                         std::mem::take(&mut self.state.pending_chronicle_archive);
                     if !ui_chronicle_spool.is_empty() {
@@ -277,6 +287,9 @@ impl HorizonteLatamApp {
                     self.state.paused = prev_paused;
                     self.state.speed_level = prev_speed;
                     self.state.difficulty = prev_diff;
+                    if self.state.last_diplomacy_feedback.is_none() {
+                        self.state.last_diplomacy_feedback = prev_diplomacy_feedback;
+                    }
                     if self.state.selected_country_id.is_none() {
                         self.state.selected_country_id = prev_selected;
                     }
@@ -506,6 +519,7 @@ impl eframe::App for HorizonteLatamApp {
                                     }
                                 }
                                 self.show_country_popup = false;
+                                self.show_minister_popup = false;
                                 self.last_tick_instant = Instant::now();
                                 self.route = ScreenRoute::WorldMap;
                             }
@@ -557,7 +571,16 @@ impl eframe::App for HorizonteLatamApp {
                     render_companies_screen(ui, &self.state, &mut self.companies_view);
                 }
                 ScreenRoute::Politics => render_politics_screen(ui, &mut self.state),
-                ScreenRoute::Diplomacy => render_diplomacy_screen(ui, &mut self.state),
+                ScreenRoute::Diplomacy => {
+                    let res = render_diplomacy_screen(
+                        ui,
+                        &mut self.state,
+                        &mut self.show_minister_popup,
+                    );
+                    for act in res.actions {
+                        self.dispatch_player_action(act);
+                    }
+                }
                 ScreenRoute::Military => {
                     match render_military_screen(ui, &mut self.state, &self.province_graph) {
                         MilitaryScreenAction::None => {}
@@ -648,6 +671,17 @@ impl eframe::App for HorizonteLatamApp {
         }
         self.map_viewport.hud_rects = next_hud_rects;
 
+        // Popup modal de asignación del Ministro de Relaciones Exteriores
+        if in_campaign && self.route == ScreenRoute::Diplomacy {
+            if let Some(act) =
+                render_minister_assign_popup(ctx, &self.state, &mut self.show_minister_popup)
+            {
+                self.dispatch_player_action(act);
+            }
+        } else {
+            self.show_minister_popup = false;
+        }
+
         // Popup modal de evento geopolítico generado por Lua 5.4
         if let Some(ev) = self.state.active_event.clone() {
             if let Some(opt_idx) = render_event_popup(ctx, &ev) {
@@ -660,9 +694,9 @@ impl eframe::App for HorizonteLatamApp {
                                 (country.economy.treasury_usd_millions + treasury_delta).max(0.0);
                             country.economy.gdp_growth_pct += opt.gdp_growth_delta;
                             country.economy.inflation_pct =
-                                (country.economy.inflation_pct + opt.inflation_delta).max(0.4);
+                                (country.economy.inflation_pct + opt.inflation_delta).clamp(-0.4, 210.0);
                             country.stability =
-                                (country.stability + opt.stability_delta).clamp(10.0, 100.0);
+                                (country.stability + opt.stability_delta).clamp(12.0, 98.0);
                         }
                         self.state.push_chronicle(
                             pid,

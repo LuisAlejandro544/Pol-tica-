@@ -242,15 +242,23 @@ pub fn render_companies_screen(
                                                     },
                                                 );
                                             });
+                                            let health_col = if comp.financial_health >= 62.0 {
+                                                ACCENT_EMERALD
+                                            } else if comp.financial_health >= 35.0 {
+                                                ACCENT_GOLD
+                                            } else {
+                                                ACCENT_CRIMSON
+                                            };
                                             ui.label(
                                                 RichText::new(format!(
-                                                    "{} • {} • {} empleos",
+                                                    "{} • {} • {} empleos • Salud {:.0}%",
                                                     comp.category.label(),
                                                     country_name,
-                                                    comp.employees
+                                                    comp.employees,
+                                                    comp.financial_health
                                                 ))
                                                 .size(11.0)
-                                                .color(ACCENT_CYAN),
+                                                .color(health_col),
                                             );
                                             ui.label(
                                                 RichText::new(format!("Vende: {}", comp.sells))
@@ -359,6 +367,13 @@ pub fn render_companies_screen(
 
                             ui.add_space(6.0);
                             well_frame().show(ui, |ui| {
+                                let health_col = if comp.financial_health >= 62.0 {
+                                    ACCENT_EMERALD
+                                } else if comp.financial_health >= 35.0 {
+                                    ACCENT_GOLD
+                                } else {
+                                    ACCENT_CRIMSON
+                                };
                                 ui.label(
                                     RichText::new(format!(
                                         "Empleos directos generados: {} puestos",
@@ -369,15 +384,30 @@ pub fn render_companies_screen(
                                 );
                                 ui.label(
                                     RichText::new(format!(
-                                        "Aporte anual estimado al PIB: +{}",
-                                        format_usd_millions(comp.annual_gdp_contribution_m)
+                                        "Aporte anual al PIB: +{}  |  Exportación: {:.0}%",
+                                        format_usd_millions(comp.annual_gdp_contribution_m),
+                                        comp.export_share * 100.0
                                     ))
-                                    .size(12.5)
+                                    .size(12.0)
                                     .color(ACCENT_GOLD),
                                 );
                                 ui.label(
+                                    RichText::new(format!(
+                                        "Salud Financiera: {:.0}%{}",
+                                        comp.financial_health,
+                                        if comp.financial_health < 35.0 {
+                                            " (Riesgo de despidos o quiebra por tasas/recesión)"
+                                        } else {
+                                            ""
+                                        }
+                                    ))
+                                    .strong()
+                                    .size(11.5)
+                                    .color(health_col),
+                                );
+                                ui.label(
                                     RichText::new(
-                                        "Impacto lógico: reduce la tasa de desempleo y amplía la base tributaria del país sede.",
+                                        "Impacto bidireccional: genera empleos, divisas e impuestos, pero puede recortar plantilla o quebrar si cae su salud.",
                                     )
                                     .size(11.0)
                                     .color(TEXT_MUTED),

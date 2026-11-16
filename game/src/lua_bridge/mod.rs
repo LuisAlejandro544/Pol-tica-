@@ -1,17 +1,17 @@
 //! Propósito del archivo:
 //! Puente seguro entre Rust y Lua 5.4 (`mlua` con Lua 5.4 compilado estáticamente).
 //! Carga los países iniciales desde `scripts/countries_latam.lua`, las provincias y
-//! capitales desde `scripts/provinces_latam.lua`, ejecuta las fórmulas mensuales de
-//! `scripts/game_rules.lua` y genera eventos desde `scripts/events_latam.lua`.
-//! Vive en el hilo secundario de simulación para nunca bloquear el renderizado de la UI.
+//! capitales desde `scripts/provinces_latam.lua`, ejecuta las fórmulas macroeconómicas
+//! y parlamentarias de `scripts/game_rules.lua` (Taylor, Curva de Phillips, Congreso)
+//! y evalúa eventos contextuales por causas reales en `scripts/events_latam.lua`.
 
 use crate::map::svg_loader::ASSETS_DIR;
 use crate::models::{
     AiPersonality, CapitalMarkerData, CompanyCategory, CompanyCategoryTemplate, CountryState,
-    EconomyState, EventOption, GameEvent, LeaderProfile, MilitaryState, PoliticalParty,
-    ProvinceData,
+    EconomyState, EventOption, GameEvent, GlobalMacroCycle, LeaderProfile, MilitaryState,
+    PoliticalParty, ProvinceData,
 };
-use mlua::{ChunkMode, Function, Lua, Table};
+use mlua::{ChunkMode, Function, Lua, Table, Value};
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
 use thiserror::Error;
@@ -24,9 +24,29 @@ pub enum LuaBridgeError {
     MissingScript(String),
 }
 
+pub struct LuaStepContext<'a> {
+    pub corporate_gdp_bonus_m: f64,
+    pub corporate_export_bonus_m: f64,
+    pub corporate_jobs_total: u64,
+    pub trade_pacts_count: u32,
+    pub at_war: bool,
+    pub global_cycle: &'a GlobalMacroCycle,
+}
+
+pub struct LuaEventContext<'a> {
+    pub country: &'a CountryState,
+    pub company_count: usize,
+    pub dominant_sector: &'a str,
+    pub at_war: bool,
+    pub global_cycle: &'a GlobalMacroCycle,
+    pub last_event_id: Option<&'a str>,
+    pub total_days: u64,
+}
+
 pub struct LuaEngine {
     lua: Lua,
     rules_bytecode: OnceLock<Vec<u8>>,
+    events_bytecode: OnceLock<Vec<u8>>,
 }
 
 impl LuaEngine {
@@ -36,6 +56,7 @@ impl LuaEngine {
         Ok(Self {
             lua,
             rules_bytecode: OnceLock::new(),
+            events_bytecode: OnceLock::new(),
         })
     }
 
@@ -159,10 +180,24 @@ impl LuaEngine {
             };
 
             let active_troops: u64 = row.get("active_troops")?;
+            let gdp_usd_millions: f64 = row.get("gdp_usd_millions")?;
+            let defense_budget_pct: f64 = row.get("defense_budget_pct")?;
             let inflation_pct: f64 = row.get("inflation_pct")?;
             let gdp_growth_pct: f64 = row.get("gdp_growth_pct")?;
-            let initial_unemp = (6.4 + inflation_pct * 0.12 - gdp_growth_pct * 0.35).clamp(3.8, 14.5);
+            let debt_to_gdp_pct: f64 = row.get("debt_to_gdp_pct")?;
+            let stability: f64 = row.get("stability")?;
+            let initial_unemp =
+                (6.4 + inflation_pct * 0.12 - gdp_growth_pct * 0.35).clamp(3.8, 14.5);
             let initial_upkeep = (active_troops as f64 / 1_000.0) * 1.35;
+            let initial_risk = (130.0
+                + (debt_to_gdp_pct - 50.0).max(0.0) * 9.5
+                + (62.0 - stability).max(0.0) * 8.0)
+                .clamp(95.0, 1800.0);
+            let ruling_seats = parties
+                .iter()
+                .find(|p| p.is_ruling)
+                .map(|p| p.seats_pct)
+                .unwrap_or(45.0);
 
             let state = CountryState {
                 id: id.clone(),
@@ -173,15 +208,15 @@ impl LuaEngine {
                 population: row.get("population")?,
                 pop_growth_pct: row.get("pop_growth_pct")?,
                 urban_pct: row.get("urban_pct")?,
-                stability: row.get("stability")?,
+                stability,
                 economy: EconomyState {
                     currency_code: row.get("currency_code")?,
                     currency_name: row.get("currency_name")?,
                     exchange_rate_usd: row.get("exchange_rate_usd")?,
                     inflation_pct,
-                    gdp_usd_millions: row.get("gdp_usd_millions")?,
+                    gdp_usd_millions,
                     gdp_growth_pct,
-                    debt_to_gdp_pct: row.get("debt_to_gdp_pct")?,
+                    debt_to_gdp_pct,
                     treasury_usd_millions: row.get("treasury_usd_millions")?,
                     tax_rate_pct: row.get("tax_rate_pct")?,
                     interest_rate_pct: row.get("interest_rate_pct")?,
@@ -191,16 +226,31 @@ impl LuaEngine {
                     troop_upkeep_usd_millions: initial_upkeep,
                     unemployment_pct: initial_unemp,
                     corporate_gdp_bonus_m: 0.0,
+                    potential_gdp_growth_pct: (gdp_growth_pct + 0.35).clamp(2.2, 5.2),
+                    inflation_target_pct: if inflation_pct >= 12.0 { 6.0 } else { 3.0 },
+                    trade_balance_usd_millions: 0.0,
+                    country_risk_bps: initial_risk,
+                    corporate_tax_revenue_m: 0.0,
                 },
                 military: MilitaryState {
                     active_troops,
-                    defense_budget_pct: row.get("defense_budget_pct")?,
+                    defense_budget_pct,
                     readiness: 72.0,
+                    ai_military_budget_m: (((gdp_usd_millions / 12.0)
+                        * (defense_budget_pct / 100.0))
+                        * 0.65)
+                        .clamp(40.0, 420.0),
+                    last_ai_recruit_day: 0,
                 },
                 political_parties: parties,
                 neighbors,
                 ai_personality,
                 months_to_election: 24 + ((idx as u32 * 7) % 24),
+                coalition_parties: Vec::new(),
+                legislative_support_pct: ruling_seats,
+                political_capital: 48.0,
+                foreign_minister: None,
+                minister_candidates: Vec::new(),
             };
             countries.insert(id, state);
         }
@@ -251,7 +301,6 @@ impl LuaEngine {
     }
 
     /// Carga el catálogo de provincias y capitales generado por Blender desde `scripts/provinces_latam.lua`.
-    /// Si el archivo aún no existe, devuelve colecciones vacías para mantener compatibilidad.
     pub fn load_provinces_and_capitals(
         &self,
     ) -> Result<(BTreeMap<String, ProvinceData>, Vec<CapitalMarkerData>), LuaBridgeError> {
@@ -305,12 +354,11 @@ impl LuaEngine {
         Ok((provinces, capitals))
     }
 
-    /// Ejecuta un paso económico y político mensual para un país usando `scripts/game_rules.lua` precompilado.
+    /// Ejecuta un paso económico, cambiario y parlamentario mensual usando `scripts/game_rules.lua`.
     pub fn step_country_via_lua(
         &self,
         country: &mut CountryState,
-        corporate_gdp_bonus_m: f64,
-        corporate_jobs_total: u64,
+        ctx: &LuaStepContext<'_>,
     ) -> Result<(), LuaBridgeError> {
         let rules_bytecode = if let Some(bc) = self.rules_bytecode.get() {
             bc
@@ -328,12 +376,13 @@ impl LuaEngine {
             .set_mode(ChunkMode::Binary)
             .eval()?;
 
-        // 1. Cálculo macroeconómico en Lua 5.4 (incluye mantenimiento militar, empresas y desempleo)
+        // 1. Cálculo macroeconómico realista en Lua 5.4
         let econ_fn: Function = rules_tbl.get("calculate_monthly_economy")?;
         let econ_in = self.lua.create_table()?;
         econ_in.set("currency_code", country.economy.currency_code.as_str())?;
         econ_in.set("exchange_rate_usd", country.economy.exchange_rate_usd)?;
         econ_in.set("inflation_pct", country.economy.inflation_pct)?;
+        econ_in.set("inflation_target_pct", country.economy.inflation_target_pct)?;
         econ_in.set("gdp_usd_millions", country.economy.gdp_usd_millions)?;
         econ_in.set("gdp_growth_pct", country.economy.gdp_growth_pct)?;
         econ_in.set("debt_to_gdp_pct", country.economy.debt_to_gdp_pct)?;
@@ -346,13 +395,20 @@ impl LuaEngine {
         econ_in.set("stability", country.stability)?;
         econ_in.set("active_troops", country.military.active_troops)?;
         econ_in.set("unemployment_pct", country.economy.unemployment_pct)?;
-        econ_in.set("corporate_gdp_bonus_m", corporate_gdp_bonus_m)?;
-        econ_in.set("corporate_jobs_total", corporate_jobs_total)?;
+        econ_in.set("corporate_gdp_bonus_m", ctx.corporate_gdp_bonus_m)?;
+        econ_in.set("corporate_export_bonus_m", ctx.corporate_export_bonus_m)?;
+        econ_in.set("corporate_jobs_total", ctx.corporate_jobs_total)?;
         econ_in.set("population", country.population)?;
+        econ_in.set("global_fed_rate_pct", ctx.global_cycle.fed_rate_pct)?;
+        econ_in.set("commodity_index", ctx.global_cycle.commodity_index)?;
+        econ_in.set("trade_pacts_count", ctx.trade_pacts_count)?;
+        econ_in.set("at_war", ctx.at_war)?;
+        econ_in.set("last_monthly_balance", country.economy.last_monthly_balance)?;
 
         let econ_out: Table = econ_fn.call(econ_in)?;
         country.economy.gdp_usd_millions = econ_out.get("gdp_usd_millions")?;
         country.economy.gdp_growth_pct = econ_out.get("gdp_growth_pct")?;
+        country.economy.potential_gdp_growth_pct = econ_out.get("potential_gdp_growth_pct")?;
         country.economy.inflation_pct = econ_out.get("inflation_pct")?;
         country.economy.exchange_rate_usd = econ_out.get("exchange_rate_usd")?;
         country.economy.treasury_usd_millions = econ_out.get("treasury_usd_millions")?;
@@ -360,9 +416,13 @@ impl LuaEngine {
         country.economy.last_monthly_balance = econ_out.get("monthly_net_balance")?;
         country.economy.troop_upkeep_usd_millions = econ_out.get("troop_upkeep_m")?;
         country.economy.unemployment_pct = econ_out.get("unemployment_pct")?;
-        country.economy.corporate_gdp_bonus_m = corporate_gdp_bonus_m;
+        country.economy.trade_balance_usd_millions = econ_out.get("trade_balance_usd_millions")?;
+        country.economy.country_risk_bps = econ_out.get("country_risk_bps")?;
+        country.economy.corporate_tax_revenue_m = econ_out.get("corporate_tax_revenue_m")?;
+        country.economy.corporate_gdp_bonus_m = ctx.corporate_gdp_bonus_m;
 
-        // 2. Cálculo de aprobación política y estabilidad en Lua 5.4
+        // 2. Gobernabilidad del Congreso (mesa circular), estabilidad y dinámica viva de oposición
+        country.legislative_support_pct = country.compute_legislative_support_pct();
         let ruling_approval = country
             .ruling_party()
             .map(|p| p.approval_pct)
@@ -377,14 +437,27 @@ impl LuaEngine {
         pol_in.set("ruling_approval_pct", ruling_approval)?;
         pol_in.set("stability", country.stability)?;
         pol_in.set("unemployment_pct", country.economy.unemployment_pct)?;
+        pol_in.set("country_risk_bps", country.economy.country_risk_bps)?;
+        pol_in.set("legislative_support_pct", country.legislative_support_pct)?;
+        pol_in.set("political_capital", country.political_capital)?;
+        pol_in.set("at_war", ctx.at_war)?;
 
         let pol_out: Table = pol_fn.call(pol_in)?;
         let new_ruling_approval: f64 = pol_out.get("ruling_approval_pct")?;
         country.stability = pol_out.get("stability")?;
+        country.political_capital = pol_out.get("political_capital")?;
 
-        if let Some(ruling) = country.political_parties.iter_mut().find(|p| p.is_ruling) {
-            ruling.approval_pct = new_ruling_approval;
-        }
+        let left_delta: f64 = pol_out.get("left_opposition_delta")?;
+        let right_delta: f64 = pol_out.get("right_opposition_delta")?;
+        let center_delta: f64 = pol_out.get("center_opposition_delta")?;
+
+        update_party_approvals(
+            &mut country.political_parties,
+            new_ruling_approval,
+            left_delta,
+            right_delta,
+            center_delta,
+        );
 
         // Crecimiento demográfico mensual
         let monthly_pop_factor = 1.0 + (country.pop_growth_pct / 100.0) / 12.0;
@@ -393,12 +466,57 @@ impl LuaEngine {
         Ok(())
     }
 
-    /// Selecciona un evento dinámico desde `scripts/events_latam.lua`.
-    pub fn pick_event(&self, turn: u64, roll: u64) -> Result<GameEvent, LuaBridgeError> {
-        let src = Self::read_script("scripts/events_latam.lua")?;
-        let tbl: Table = self.lua.load(src).eval()?;
-        let pick_fn: Function = tbl.get("pick_event")?;
-        let ev_tbl: Table = pick_fn.call((turn, roll))?;
+    /// Evalúa un evento contextual por causas reales desde `scripts/events_latam.lua`.
+    pub fn pick_contextual_event(
+        &self,
+        ctx: &LuaEventContext<'_>,
+    ) -> Result<Option<GameEvent>, LuaBridgeError> {
+        let events_bytecode = if let Some(bc) = self.events_bytecode.get() {
+            bc
+        } else {
+            let src = Self::read_script("scripts/events_latam.lua")?;
+            let compiled = self.load_or_compile_bytecode("events_latam", src)?;
+            let _ = self.events_bytecode.set(compiled);
+            self.events_bytecode
+                .get()
+                .expect("events_bytecode inicializado")
+        };
+
+        let tbl: Table = self
+            .lua
+            .load(events_bytecode.as_slice())
+            .set_mode(ChunkMode::Binary)
+            .eval()?;
+        let pick_fn: Function = tbl.get("pick_contextual_event")?;
+
+        let lua_ctx = self.lua.create_table()?;
+        lua_ctx.set("inflation_pct", ctx.country.economy.inflation_pct)?;
+        lua_ctx.set("gdp_growth_pct", ctx.country.economy.gdp_growth_pct)?;
+        lua_ctx.set("unemployment_pct", ctx.country.economy.unemployment_pct)?;
+        lua_ctx.set("debt_to_gdp_pct", ctx.country.economy.debt_to_gdp_pct)?;
+        lua_ctx.set("interest_rate_pct", ctx.country.economy.interest_rate_pct)?;
+        lua_ctx.set("country_risk_bps", ctx.country.economy.country_risk_bps)?;
+        lua_ctx.set(
+            "trade_balance_usd_millions",
+            ctx.country.economy.trade_balance_usd_millions,
+        )?;
+        lua_ctx.set("stability", ctx.country.stability)?;
+        lua_ctx.set(
+            "legislative_support_pct",
+            ctx.country.legislative_support_pct,
+        )?;
+        lua_ctx.set("company_count", ctx.company_count)?;
+        lua_ctx.set("dominant_sector", ctx.dominant_sector)?;
+        lua_ctx.set("at_war", ctx.at_war)?;
+        lua_ctx.set("commodity_index", ctx.global_cycle.commodity_index)?;
+        lua_ctx.set("fed_rate_pct", ctx.global_cycle.fed_rate_pct)?;
+        lua_ctx.set("last_event_id", ctx.last_event_id.unwrap_or(""))?;
+        lua_ctx.set("total_days", ctx.total_days)?;
+
+        let val: Value = pick_fn.call(lua_ctx)?;
+        let Value::Table(ev_tbl) = val else {
+            return Ok(None);
+        };
 
         let opts_tbl: Table = ev_tbl.get("options")?;
         let mut options = Vec::new();
@@ -413,11 +531,62 @@ impl LuaEngine {
             });
         }
 
-        Ok(GameEvent {
+        Ok(Some(GameEvent {
             id: ev_tbl.get("id")?,
             title: ev_tbl.get("title")?,
             description: ev_tbl.get("description")?,
             options,
-        })
+        }))
+    }
+}
+
+/// Actualiza la aprobación del gobierno y redistribuye la intención de voto entre la oposición
+/// según su afinidad ideológica con la coyuntura (desempleo, inflación, minoría parlamentaria).
+fn update_party_approvals(
+    parties: &mut [PoliticalParty],
+    new_ruling_approval: f64,
+    left_delta: f64,
+    right_delta: f64,
+    center_delta: f64,
+) {
+    if parties.is_empty() {
+        return;
+    }
+    let clamped_ruling = new_ruling_approval.clamp(8.0, 86.0);
+    for party in parties.iter_mut() {
+        if party.is_ruling {
+            party.approval_pct = clamped_ruling;
+        } else {
+            let lower = party.ideology.to_lowercase();
+            let swing = if lower.contains("izquierda")
+                || lower.contains("progres")
+                || lower.contains("ecolog")
+                || lower.contains("social")
+            {
+                left_delta
+            } else if lower.contains("derecha")
+                || lower.contains("conserv")
+                || lower.contains("liberal")
+            {
+                right_delta
+            } else {
+                center_delta
+            };
+            party.approval_pct = (party.approval_pct + swing * 0.35).clamp(4.0, 75.0);
+        }
+    }
+
+    // Rebalanceo suave de la oposición para que la suma total se mantenga cerca de 100%
+    let opp_sum: f64 = parties
+        .iter()
+        .filter(|p| !p.is_ruling)
+        .map(|p| p.approval_pct)
+        .sum();
+    let target_opp = (100.0 - clamped_ruling).max(12.0);
+    if opp_sum > 0.1 {
+        let ratio = target_opp / opp_sum;
+        for party in parties.iter_mut().filter(|p| !p.is_ruling) {
+            party.approval_pct = (party.approval_pct * (0.65 + 0.35 * ratio)).clamp(4.0, 75.0);
+        }
     }
 }

@@ -20,6 +20,8 @@ pub fn render_economy_screen(ui: &mut Ui, state: &mut GameState) -> bool {
     let corp_count = state.companies.iter().filter(|c| c.country_id == pid).count();
     let corp_jobs = state.country_company_jobs(&pid);
     let corp_gdp = state.country_company_gdp_bonus(&pid);
+    let corp_exports = state.country_company_export_bonus(&pid);
+    let global_cycle = state.global_cycle.clone();
 
     let Some(country) = state.countries.get_mut(&pid) else {
         return false;
@@ -70,6 +72,32 @@ pub fn render_economy_screen(ui: &mut Ui, state: &mut GameState) -> bool {
                                 .size(15.0)
                                 .color(TEXT_PRIMARY),
                             );
+                            let real_rate =
+                                country.economy.interest_rate_pct - country.economy.inflation_pct;
+                            ui.label(
+                                RichText::new(format!(
+                                    "Meta BC: {:.1}%  |  Tasa Real: {:+.2}%  |  Riesgo País: {:.0} pb",
+                                    country.economy.inflation_target_pct,
+                                    real_rate,
+                                    country.economy.country_risk_bps
+                                ))
+                                .size(11.0)
+                                .color(if country.economy.country_risk_bps >= 500.0 {
+                                    ACCENT_CRIMSON
+                                } else {
+                                    ACCENT_CYAN
+                                }),
+                            );
+                            ui.label(
+                                RichText::new(format!(
+                                    "Ciclo Global: {} (Fed {:.2}% | Comm. {:.0})",
+                                    global_cycle.cycle_label,
+                                    global_cycle.fed_rate_pct,
+                                    global_cycle.commodity_index
+                                ))
+                                .size(10.5)
+                                .color(TEXT_MUTED),
+                            );
                         });
                         ui.add_space(6.0);
                         ui.label(
@@ -111,8 +139,9 @@ pub fn render_economy_screen(ui: &mut Ui, state: &mut GameState) -> bool {
                             ));
                             ui.label(
                                 RichText::new(format!(
-                                    "Crecimiento Anual: {:+.2}%",
-                                    country.economy.gdp_growth_pct
+                                    "Crecimiento Anual: {:+.2}% (Potencial: {:.2}%)",
+                                    country.economy.gdp_growth_pct,
+                                    country.economy.potential_gdp_growth_pct
                                 ))
                                 .strong()
                                 .color(if country.economy.gdp_growth_pct >= 0.0 {
@@ -127,10 +156,12 @@ pub fn render_economy_screen(ui: &mut Ui, state: &mut GameState) -> bool {
                             ));
                             ui.label(
                                 RichText::new(format!(
-                                    "Balance Neto Mensual: {:+.1} M USD",
-                                    country.economy.last_monthly_balance
+                                    "Balance Fiscal: {:+.1} M/mes  |  Balanza Com.: {:+.1} M/mes",
+                                    country.economy.last_monthly_balance,
+                                    country.economy.trade_balance_usd_millions
                                 ))
                                 .strong()
+                                .size(11.5)
                                 .color(if country.economy.last_monthly_balance >= 0.0 {
                                     ACCENT_EMERALD
                                 } else {
@@ -147,12 +178,14 @@ pub fn render_economy_screen(ui: &mut Ui, state: &mut GameState) -> bool {
                             );
                             ui.label(
                                 RichText::new(format!(
-                                    "Sector Privado: {} empresas ({} empleos | +{} PIB/año)",
+                                    "Sector Privado: {} emp. ({} puestos | +{} PIB | +{} Exp/año | Imp. +${:.1}M/mes)",
                                     corp_count,
                                     corp_jobs,
-                                    format_usd_millions(corp_gdp)
+                                    format_usd_millions(corp_gdp),
+                                    format_usd_millions(corp_exports),
+                                    country.economy.corporate_tax_revenue_m
                                 ))
-                                .size(11.5)
+                                .size(11.0)
                                 .color(ACCENT_CYAN),
                             );
                         });

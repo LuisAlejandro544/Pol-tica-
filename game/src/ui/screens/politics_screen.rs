@@ -85,16 +85,36 @@ pub fn render_politics_screen(ui: &mut Ui, state: &mut GameState) {
                     ui.add_space(6.0);
                 }
 
-                // Mesa circular del Congreso con sillas pintadas por partido + barra y estabilidad
+                // Mesa circular del Congreso con sillas pintadas por partido + quórum de coalición y estabilidad
                 let chair_counts =
                     allocate_parliament_chairs(&country.political_parties, TOTAL_CONGRESS_CHAIRS);
+                let support_pct = country.compute_legislative_support_pct();
+                country.legislative_support_pct = support_pct;
+                let has_majority = support_pct >= 50.0;
+
                 panel_frame(true).inner_margin(10.0).show(ui, |ui| {
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         ui.label(
-                            RichText::new("MESA CIRCULAR DEL CONGRESO (SILLAS POR PARTIDO)")
+                            RichText::new("MESA CIRCULAR DEL CONGRESO (SILLAS Y COALICIÓN)")
                                 .strong()
                                 .size(12.5)
                                 .color(ACCENT_GOLD),
+                        );
+                        ui.separator();
+                        ui.label(
+                            RichText::new(format!(
+                                "Quórum: {:.1}% ({})  •  Cap. Político: {:.0}",
+                                support_pct,
+                                if has_majority { "MAYORÍA" } else { "MINORÍA" },
+                                country.political_capital
+                            ))
+                            .strong()
+                            .size(11.5)
+                            .color(if has_majority {
+                                ACCENT_EMERALD
+                            } else {
+                                ACCENT_CRIMSON
+                            }),
                         );
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             draw_gauge_bar(
@@ -178,15 +198,33 @@ pub fn render_politics_screen(ui: &mut Ui, state: &mut GameState) {
                                             CornerRadius::same(2),
                                             col,
                                         );
-                                        if party.is_ruling || is_hi {
+                                        let is_coalition = !party.is_ruling
+                                            && country
+                                                .coalition_parties
+                                                .iter()
+                                                .any(|ac| ac == &party.acronym);
+                                        if party.is_ruling || is_hi || is_coalition {
                                             ui.painter().rect_stroke(
                                                 dot_rect,
                                                 CornerRadius::same(2),
-                                                Stroke::new(1.2_f32, ACCENT_GOLD),
+                                                Stroke::new(
+                                                    1.2_f32,
+                                                    if party.is_ruling || is_hi {
+                                                        ACCENT_GOLD
+                                                    } else {
+                                                        ACCENT_EMERALD
+                                                    },
+                                                ),
                                                 egui::StrokeKind::Inside,
                                             );
                                         }
-                                        let tag = if party.is_ruling { "GOB" } else { "OPO" };
+                                        let tag = if party.is_ruling {
+                                            "GOB"
+                                        } else if is_coalition {
+                                            "COALICIÓN"
+                                        } else {
+                                            "OPO"
+                                        };
                                         ui.label(
                                             RichText::new(format!(
                                                 "[{}] {} sillas ({:.1}%) • {} • {}",
@@ -206,11 +244,13 @@ pub fn render_politics_screen(ui: &mut Ui, state: &mut GameState) {
 
                             ui.add_space(4.0);
                             ui.label(
-                                RichText::new(
-                                    "Base preparada para votaciones parlamentarias y coaliciones.",
-                                )
+                                RichText::new(if has_majority {
+                                    "Mayoría legislativa activa: fortalece estabilidad institucional y capital político."
+                                } else {
+                                    "Gobierno en minoría: pacta coalición con partidos opositores para asegurar quórum."
+                                })
                                 .size(10.5)
-                                .color(TEXT_MUTED),
+                                .color(if has_majority { ACCENT_EMERALD } else { ACCENT_CRIMSON }),
                             );
                         });
                     });
@@ -232,10 +272,20 @@ pub fn render_politics_screen(ui: &mut Ui, state: &mut GameState) {
                                 .id_salt("politics_parties_scroll")
                                 .max_height(215.0)
                                 .show(ui, |ui| {
+                                    let mut coalition_action: Option<(String, String, bool)> = None;
+                                    let current_cap = country.political_capital;
+
                                     for party in &country.political_parties {
                                         let col = ideology_color(&party.ideology);
+                                        let is_coalition = !party.is_ruling
+                                            && country
+                                                .coalition_parties
+                                                .iter()
+                                                .any(|ac| ac == &party.acronym);
                                         card_frame(Some(if party.is_ruling {
                                             ACCENT_GOLD
+                                        } else if is_coalition {
+                                            ACCENT_EMERALD
                                         } else {
                                             BORDER_BRASS_DIM
                                         }))
@@ -244,6 +294,8 @@ pub fn render_politics_screen(ui: &mut Ui, state: &mut GameState) {
                                             ui.horizontal_wrapped(|ui| {
                                                 let role = if party.is_ruling {
                                                     "GOBIERNO"
+                                                } else if is_coalition {
+                                                    "ALIADO COALICIÓN"
                                                 } else {
                                                     "OPOSICIÓN"
                                                 };
@@ -262,6 +314,8 @@ pub fn render_politics_screen(ui: &mut Ui, state: &mut GameState) {
                                                         .strong()
                                                         .color(if party.is_ruling {
                                                             ACCENT_GOLD
+                                                        } else if is_coalition {
+                                                            ACCENT_EMERALD
                                                         } else {
                                                             TEXT_MUTED
                                                         }),
@@ -300,8 +354,62 @@ pub fn render_politics_screen(ui: &mut Ui, state: &mut GameState) {
                                                 col,
                                                 &format!("Aprobación {:.1}%", party.approval_pct),
                                             );
+                                            if !party.is_ruling {
+                                                ui.add_space(4.0);
+                                                let can_pact = is_coalition || current_cap >= 20.0;
+                                                let btn_lbl = if is_coalition {
+                                                    "Disolver Pacto de Coalición"
+                                                } else {
+                                                    "Pactar Coalición (-20 Cap.)"
+                                                };
+                                                if game_button(
+                                                    ui,
+                                                    Vec2::new(ui.available_width(), 26.0),
+                                                    btn_lbl,
+                                                    None,
+                                                    can_pact,
+                                                    Some(if is_coalition {
+                                                        ACCENT_CRIMSON
+                                                    } else {
+                                                        ACCENT_EMERALD
+                                                    }),
+                                                )
+                                                .clicked()
+                                                    && can_pact
+                                                {
+                                                    coalition_action = Some((
+                                                        party.acronym.clone(),
+                                                        party.leader.full_name.clone(),
+                                                        !is_coalition,
+                                                    ));
+                                                }
+                                            }
                                         });
                                         ui.add_space(5.0);
+                                    }
+
+                                    if let Some((acronym, leader_name, join)) = coalition_action {
+                                        if join {
+                                            if !country.coalition_parties.iter().any(|a| a == &acronym) {
+                                                country.coalition_parties.push(acronym.clone());
+                                            }
+                                            country.political_capital =
+                                                (country.political_capital - 20.0).max(0.0);
+                                            country.stability =
+                                                (country.stability + 2.5).min(98.0);
+                                            decree_msg = Some(format!(
+                                                "Coalición legislativa firmada con [{acronym}] (líder {leader_name})."
+                                            ));
+                                        } else {
+                                            country.coalition_parties.retain(|a| a != &acronym);
+                                            country.stability =
+                                                (country.stability - 2.0).max(12.0);
+                                            decree_msg = Some(format!(
+                                                "[{acronym}] abandonó la coalición en el Congreso."
+                                            ));
+                                        }
+                                        country.legislative_support_pct =
+                                            country.compute_legislative_support_pct();
                                     }
                                 });
                         });
@@ -535,17 +643,31 @@ fn draw_congress_round_table(
         let seat_r = if is_hovered { 5.4 } else { 4.4 };
         p.circle_filled(pos, seat_r, base_col);
 
+        let is_coalition = !party.is_ruling
+            && country
+                .coalition_parties
+                .iter()
+                .any(|ac| ac == &party.acronym);
         let rim_col = if is_hovered {
             Color32::WHITE
         } else if party.is_ruling {
             ACCENT_GOLD
+        } else if is_coalition {
+            ACCENT_EMERALD
         } else {
             Color32::from_rgb(16, 22, 30)
         };
         p.circle_stroke(
             pos,
             seat_r,
-            Stroke::new(if is_hovered || party.is_ruling { 1.4_f32 } else { 0.9_f32 }, rim_col),
+            Stroke::new(
+                if is_hovered || party.is_ruling || is_coalition {
+                    1.4_f32
+                } else {
+                    0.9_f32
+                },
+                rim_col,
+            ),
         );
 
         // Respaldo de la silla en el lado exterior

@@ -44,7 +44,7 @@ Descripción exacta de carpetas y responsabilidades de cada módulo en el reposi
 │   └── src/
 │       ├── lib.rs                    # Entrada android_main(AndroidApp) (con cacheDir + PIPELINE_CACHE) y run_desktop()
 │       ├── main.rs                   # Binario de escritorio
-│       ├── models/mod.rs             # Structs y enums (CountryState, LeaderProfile, ArmyUnit, CompanyEntity, ProvinceNode, GameState)
+│       ├── models/mod.rs             # Structs y enums (CountryState, LeaderProfile, ForeignMinister, DiplomaticRelation, ArmyUnit, CompanyEntity, GameState)
 │       ├── cache/mod.rs              # Caché nativa (mapa 3D/grafo, shaders wgpu, bytecode Lua 5.4, crónica/gráficas/miniaturas)
 │       ├── map/
 │       │   ├── mod.rs
@@ -52,12 +52,12 @@ Descripción exacta de carpetas y responsabilidades de cada módulo en el reposi
 │       │   ├── renderer_3d.rs        # Renderizador 3D `wgpu` + `egui-wgpu` con `PipelineCache` persistente
 │       │   └── svg_loader.rs         # Incrustación `assets` (`include_dir!`) y lector SVG
 │       ├── lua_bridge/mod.rs         # VM Lua 5.4 (mlua) con carga/guardado de bytecode precompilado
-│       ├── ai/mod.rs                 # IA local paralela (rayon) con reclutamiento, rutas entre estados, elecciones y diplomacia
+│       ├── ai/mod.rs                 # IA local paralela (rayon) con presupuesto militar, tope paz/guerra, refuerzo sin spam, elecciones y diplomacia
 │       ├── engine/
-│       │   ├── mod.rs                # Simulación continua en tiempo real (días, tropas, bolsa, empresas y volcado a caché)
-│       │   └── leaders.rs            # Generador aleatorio de Presidente y líderes de oposición (nombre, edad, nacionalidad)
+│       │   ├── mod.rs                # Simulación continua en tiempo real (días, tropas, bolsa, empresas, misiones de 0 días y volcado a caché)
+│       │   └── leaders.rs            # Generador aleatorio de Presidente, oposición y candidatos a Ministro de Relaciones Exteriores
 │       └── ui/
-│           ├── mod.rs                # Router multipantalla (HorizonteLatamApp) y acumulador de tiempo real
+│           ├── mod.rs                # Router multipantalla (HorizonteLatamApp), popups modales y acumulador de tiempo real
 │           ├── theme.rs              # Paleta táctica, marcos flotantes con sombra, íconos vectoriales y biseles
 │           ├── components/
 │           │   ├── chrome.rs         # HUD superior y dock inferior (fijo en gestión, flotante sobre el mapa)
@@ -70,7 +70,7 @@ Descripción exacta de carpetas y responsabilidades de cada módulo en el reposi
 │               ├── economy_screen.rs
 │               ├── companies_screen.rs # Bolsa regional, empresas dinámicas, productos, empleos y gráficas
 │               ├── politics_screen.rs  # Mesa circular del Congreso con sillas pintadas por partido, tarjetas y decretos
-│               ├── diplomacy_screen.rs
+│               ├── diplomacy_screen.rs # Cancillería: asignación de Ministro (popup), estadísticas aleatorias y misiones instantáneas (0 días)
 │               ├── military_screen.rs
 │               └── settings_screen.rs
 ├── README.md

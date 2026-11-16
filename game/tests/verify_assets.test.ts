@@ -513,3 +513,187 @@ test('Caché nativa (Mapa 3D/Grafo, Shaders wgpu, Bytecode Lua 5.4, Buffer hist�
   assert.ok(mapScreenRs.includes('Presidente:'), 'map_screen.rs debe mostrar al Presidente en el popup del país');
 });
 
+test('Macroeconomía realista (Taylor + Phillips + FX), Congreso con coaliciones, eventos por causas reales y ciclo empresarial bidireccional', () => {
+  const gameRules = fs.readFileSync(path.resolve('game/assets/scripts/game_rules.lua'), 'utf8');
+  const eventsLua = fs.readFileSync(path.resolve('game/assets/scripts/events_latam.lua'), 'utf8');
+  const modelsRs = fs.readFileSync(path.resolve('game/src/models/mod.rs'), 'utf8');
+  const luaBridge = fs.readFileSync(path.resolve('game/src/lua_bridge/mod.rs'), 'utf8');
+  const engineRs = fs.readFileSync(path.resolve('game/src/engine/mod.rs'), 'utf8');
+  const aiRs = fs.readFileSync(path.resolve('game/src/ai/mod.rs'), 'utf8');
+  const uiMod = fs.readFileSync(path.resolve('game/src/ui/mod.rs'), 'utf8');
+  const economyRs = fs.readFileSync(path.resolve('game/src/ui/screens/economy_screen.rs'), 'utf8');
+  const politicsRs = fs.readFileSync(path.resolve('game/src/ui/screens/politics_screen.rs'), 'utf8');
+  const companiesRs = fs.readFileSync(path.resolve('game/src/ui/screens/companies_screen.rs'), 'utf8');
+
+  // Balanceo de llaves y paréntesis en módulos editados
+  for (const [label, src] of [
+    ['game/src/models/mod.rs', modelsRs],
+    ['game/src/lua_bridge/mod.rs', luaBridge],
+    ['game/src/engine/mod.rs', engineRs],
+    ['game/src/ai/mod.rs', aiRs],
+    ['game/src/ui/mod.rs', uiMod],
+    ['game/src/ui/screens/economy_screen.rs', economyRs],
+    ['game/src/ui/screens/politics_screen.rs', politicsRs],
+    ['game/src/ui/screens/companies_screen.rs', companiesRs],
+  ] as const) {
+    assert.ok(src.startsWith('//! Propósito del archivo:'), `${label} debe empezar con comentario explicativo`);
+    let braces = 0;
+    let parens = 0;
+    for (const ch of src) {
+      if (ch === '{') braces++;
+      else if (ch === '}') braces--;
+      else if (ch === '(') parens++;
+      else if (ch === ')') parens--;
+    }
+    assert.equal(braces, 0, `Llaves desbalanceadas en ${label}`);
+    assert.equal(parens, 0, `Paréntesis desbalanceados en ${label}`);
+  }
+
+  // 1. Macroeconomía realista: Taylor, Phillips, pass-through cambiario, prima de riesgo y ciclo global
+  assert.ok(gameRules.includes('neutral_real_rate'), 'game_rules.lua debe calcular tasa real neutral (Regla de Taylor)');
+  assert.ok(gameRules.includes('phillips_pressure'), 'game_rules.lua debe incluir Curva de Phillips');
+  assert.ok(gameRules.includes('fx_passthrough'), 'game_rules.lua debe modelar pass-through del tipo de cambio');
+  assert.ok(gameRules.includes('country_risk_bps'), 'game_rules.lua debe calcular prima de riesgo soberano');
+  assert.ok(gameRules.includes('trade_balance_usd_millions'), 'game_rules.lua debe calcular balanza comercial');
+  assert.ok(gameRules.includes('corporate_tax_revenue_m'), 'game_rules.lua debe incluir recaudación fiscal corporativa');
+  assert.ok(modelsRs.includes('struct GlobalMacroCycle'), 'models/mod.rs debe definir GlobalMacroCycle');
+  assert.ok(engineRs.includes('step_global_macro_cycle'), 'engine/mod.rs debe actualizar el ciclo macroeconómico global');
+  assert.ok(economyRs.includes('Riesgo País:'), 'economy_screen.rs debe mostrar prima de riesgo país');
+  assert.ok(economyRs.includes('Ciclo Global:'), 'economy_screen.rs debe mostrar ciclo global Fed/Commodities');
+
+  // 2. Estabilidad conectada al Congreso (mesa circular), coaliciones y dinámica viva de oposición
+  assert.ok(!gameRules.includes('(new_ruling_approval - 50.0) * 0.03'), 'Debe eliminarse el drenaje artificial de estabilidad por aprobación < 50%');
+  assert.ok(gameRules.includes('congress_gov'), 'game_rules.lua debe vincular la estabilidad con el quórum del Congreso');
+  assert.ok(gameRules.includes('left_opposition_delta'), 'game_rules.lua debe calcular deriva ideológica de oposición');
+  assert.ok(modelsRs.includes('coalition_parties'), 'CountryState debe almacenar aliados de coalición');
+  assert.ok(modelsRs.includes('compute_legislative_support_pct'), 'CountryState debe calcular quórum de coalición');
+  assert.ok(luaBridge.includes('update_party_approvals'), 'lua_bridge/mod.rs debe actualizar dinámicamente la aprobación opositora');
+  assert.ok(politicsRs.includes('Pactar Coalición'), 'politics_screen.rs debe permitir pactar coalición sobre la mesa circular');
+  assert.ok(politicsRs.includes('Quórum:'), 'politics_screen.rs debe mostrar quórum de mayoría o minoría');
+  assert.ok(aiRs.includes('coalition_parties'), 'ai/mod.rs debe gestionar coaliciones parlamentarias para la IA');
+
+  // 3. Eventos dirigidos por causas reales (sin rotación % 4)
+  assert.ok(eventsLua.includes('pick_contextual_event'), 'events_latam.lua debe usar pick_contextual_event por causas reales');
+  assert.ok(!eventsLua.includes('% #catalog'), 'events_latam.lua no debe usar rotación cíclica módulo #catalog');
+  assert.ok(engineRs.includes('pick_contextual_event'), 'engine/mod.rs debe evaluar eventos contextuales reales');
+  assert.ok(!engineRs.includes('state.month % 4 == 0'), 'engine/mod.rs no debe disparar eventos con módulo % 4');
+
+  // 4. Ciclo empresarial bidireccional (exportaciones, salud financiera, despidos y quiebras)
+  assert.ok(modelsRs.includes('financial_health'), 'CompanyEntity debe incluir financial_health');
+  assert.ok(modelsRs.includes('export_share'), 'CompanyEntity debe incluir export_share');
+  assert.ok(modelsRs.includes('distress_days'), 'CompanyEntity debe incluir distress_days');
+  assert.ok(engineRs.includes('bankrupt_indices'), 'engine/mod.rs debe procesar quiebras de empresas insolventes');
+  assert.ok(engineRs.includes('Quiebra corporativa'), 'engine/mod.rs debe registrar cierres corporativos en la Crónica');
+  assert.ok(companiesRs.includes('Salud Financiera:'), 'companies_screen.rs debe mostrar salud financiera y riesgo corporativo');
+});
+
+test('Ministro de Relaciones Exteriores: asignación manual, estadísticas aleatorias y misiones instantáneas (0 días)', () => {
+  const modelsRs = fs.readFileSync(path.resolve('game/src/models/mod.rs'), 'utf8');
+  const leadersRs = fs.readFileSync(path.resolve('game/src/engine/leaders.rs'), 'utf8');
+  const engineRs = fs.readFileSync(path.resolve('game/src/engine/mod.rs'), 'utf8');
+  const luaBridgeRs = fs.readFileSync(path.resolve('game/src/lua_bridge/mod.rs'), 'utf8');
+  const diplomacyRs = fs.readFileSync(path.resolve('game/src/ui/screens/diplomacy_screen.rs'), 'utf8');
+  const uiModRs = fs.readFileSync(path.resolve('game/src/ui/mod.rs'), 'utf8');
+
+  // Modelos y tipos de misiones
+  assert.ok(modelsRs.includes('struct ForeignMinisterStats'), 'models/mod.rs debe definir ForeignMinisterStats');
+  assert.ok(modelsRs.includes('struct ForeignMinister'), 'models/mod.rs debe definir ForeignMinister');
+  assert.ok(modelsRs.includes('enum MinisterMissionKind'), 'models/mod.rs debe definir MinisterMissionKind');
+  for (const variant of [
+    'ImproveRelations',
+    'ProposeNonAggression',
+    'ProposeAlliance',
+    'ProposePeaceTreaty',
+    'ProposeWhitePeace',
+  ]) {
+    assert.ok(modelsRs.includes(variant), `MinisterMissionKind debe incluir ${variant}`);
+  }
+  assert.ok(modelsRs.includes('non_aggression_pact: bool'), 'DiplomaticRelation debe incluir non_aggression_pact');
+  assert.ok(modelsRs.includes('foreign_minister: Option<ForeignMinister>'), 'CountryState debe incluir foreign_minister');
+  assert.ok(modelsRs.includes('minister_candidates: Vec<ForeignMinister>'), 'CountryState debe incluir minister_candidates');
+  assert.ok(modelsRs.includes('AssignForeignMinister'), 'PlayerAction debe incluir AssignForeignMinister');
+  assert.ok(modelsRs.includes('RefreshMinisterCandidates'), 'PlayerAction debe incluir RefreshMinisterCandidates');
+  assert.ok(modelsRs.includes('ExecuteMinisterMission'), 'PlayerAction debe incluir ExecuteMinisterMission');
+
+  // Generación aleatoria y sin asignar al inicio
+  assert.ok(leadersRs.includes('generate_minister_candidates'), 'leaders.rs debe generar candidatos aleatorios de Ministro');
+  assert.ok(leadersRs.includes('assign_initial_minister_pools'), 'leaders.rs debe poblar minister_candidates dejando foreign_minister en None');
+  assert.ok(leadersRs.includes('country.foreign_minister = None'), 'El país debe iniciar sin Ministro asignado para que el jugador lo elija');
+  assert.ok(luaBridgeRs.includes('foreign_minister: None'), 'lua_bridge/mod.rs debe inicializar foreign_minister: None');
+
+  // Ejecución instantánea en 0 días (sin avanzar total_days en apply_player_action)
+  assert.ok(engineRs.includes('compute_minister_relation_gain'), 'engine/mod.rs debe calcular ganancia de relaciones del Ministro');
+  assert.ok(engineRs.includes('compute_minister_mission_chance_pct'), 'engine/mod.rs debe calcular probabilidad de aceptación del Ministro');
+  assert.ok(engineRs.includes('PlayerAction::ExecuteMinisterMission'), 'engine/mod.rs debe ejecutar misiones del Ministro al instante');
+  assert.ok(engineRs.includes('non_aggression_pact: false'), 'build_initial_state debe inicializar non_aggression_pact');
+
+  // UI multipantalla y popup dedicado sin .fixed_width()
+  assert.ok(diplomacyRs.includes('render_minister_assign_popup'), 'diplomacy_screen.rs debe incluir popup de asignación de Ministro');
+  assert.equal(diplomacyRs.includes('.fixed_width('), false, 'egui::Window en diplomacy_screen.rs no debe usar .fixed_width()');
+  assert.ok(diplomacyRs.includes('0 días'), 'diplomacy_screen.rs debe indicar ejecución en 0 días');
+  assert.ok(uiModRs.includes('show_minister_popup'), 'ui/mod.rs debe gestionar el popup del Ministro');
+  assert.ok(uiModRs.includes('render_minister_assign_popup'), 'ui/mod.rs debe renderizar el popup del Ministro en Diplomacy');
+  assert.ok(uiModRs.includes('prev_diplomacy_feedback'), 'ui/mod.rs debe preservar last_diplomacy_feedback entre ticks');
+
+  // Balanceo de llaves y paréntesis en todos los módulos modificados
+  for (const [label, src] of [
+    ['game/src/models/mod.rs', modelsRs],
+    ['game/src/engine/leaders.rs', leadersRs],
+    ['game/src/engine/mod.rs', engineRs],
+    ['game/src/lua_bridge/mod.rs', luaBridgeRs],
+    ['game/src/ui/screens/diplomacy_screen.rs', diplomacyRs],
+    ['game/src/ui/mod.rs', uiModRs],
+  ] as const) {
+    assert.ok(src.startsWith('//! Propósito del archivo:'), `${label} debe empezar con comentario explicativo`);
+    let braces = 0;
+    let parens = 0;
+    for (const ch of src) {
+      if (ch === '{') braces++;
+      else if (ch === '}') braces--;
+      else if (ch === '(') parens++;
+      else if (ch === ')') parens--;
+    }
+    assert.equal(braces, 0, `Llaves desbalanceadas en ${label}`);
+    assert.equal(parens, 0, `Paréntesis desbalanceados en ${label}`);
+  }
+});
+
+test('IA militar: presupuesto dedicado, tope de tropas (paz vs guerra), límite de mantenimiento y refuerzo sin spam', () => {
+  const modelsRs = fs.readFileSync(path.resolve('game/src/models/mod.rs'), 'utf8');
+  const luaBridgeRs = fs.readFileSync(path.resolve('game/src/lua_bridge/mod.rs'), 'utf8');
+  const aiRs = fs.readFileSync(path.resolve('game/src/ai/mod.rs'), 'utf8');
+  const engineRs = fs.readFileSync(path.resolve('game/src/engine/mod.rs'), 'utf8');
+
+  assert.ok(modelsRs.includes('ai_military_budget_m: f64'), 'MilitaryState debe definir ai_military_budget_m');
+  assert.ok(modelsRs.includes('last_ai_recruit_day: u64'), 'MilitaryState debe definir last_ai_recruit_day');
+  assert.ok(luaBridgeRs.includes('ai_military_budget_m:'), 'lua_bridge/mod.rs debe inicializar ai_military_budget_m');
+  assert.ok(luaBridgeRs.includes('last_ai_recruit_day: 0'), 'lua_bridge/mod.rs debe inicializar last_ai_recruit_day');
+
+  assert.ok(aiRs.includes('compute_ai_min_treasury_reserve'), 'ai/mod.rs debe calcular reserva mínima proporcional al PIB');
+  assert.ok(aiRs.includes('compute_ai_target_troops'), 'ai/mod.rs debe calcular tope de tropas objetivo paz vs guerra');
+  assert.ok(aiRs.includes('projected_upkeep <= max_upkeep_budget'), 'ai/mod.rs debe respetar el límite de mantenimiento sobre ingresos');
+  assert.ok(aiRs.includes('cooldown_days = if at_war { 18 } else { 30 }'), 'ai/mod.rs debe espaciar el reclutamiento IA');
+  assert.ok(aiRs.includes('max_ai_divisions'), 'ai/mod.rs debe limitar divisiones nuevas y reforzar existentes');
+  assert.ok(aiRs.includes('reinforce_idx'), 'ai/mod.rs debe reforzar divisiones existentes antes de crear nuevas');
+  assert.ok(engineRs.includes('country.military.ai_military_budget_m + monthly_topup'), 'engine/mod.rs debe recargar mensualmente el presupuesto militar de la IA');
+
+  for (const [label, src] of [
+    ['game/src/models/mod.rs', modelsRs],
+    ['game/src/lua_bridge/mod.rs', luaBridgeRs],
+    ['game/src/ai/mod.rs', aiRs],
+    ['game/src/engine/mod.rs', engineRs],
+  ] as const) {
+    assert.ok(src.startsWith('//! Propósito del archivo:'), `${label} debe empezar con comentario explicativo`);
+    let braces = 0;
+    let parens = 0;
+    for (const ch of src) {
+      if (ch === '{') braces++;
+      else if (ch === '}') braces--;
+      else if (ch === '(') parens++;
+      else if (ch === ')') parens--;
+    }
+    assert.equal(braces, 0, `Llaves desbalanceadas en ${label}`);
+    assert.equal(parens, 0, `Paréntesis desbalanceados en ${label}`);
+  }
+});
+

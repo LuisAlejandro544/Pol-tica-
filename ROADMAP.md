@@ -28,12 +28,15 @@ Este documento describe la evolución planificada del proyecto desde el prototip
 - [x] Implementar pantalla de carga (`CampaignLoading`) tras elegir país para configurar unidades/soldados predeterminados y fundar empresas privadas aleatorias (sin lista fija estática ni en todos los países), más generación continua de nuevas empresas durante la partida.
 - [x] Incorporar mesa circular del Congreso en `Política` con sillas pintadas según los escaños de cada partido y generación aleatoria de Presidente y líderes de oposición (nombre, edad y nacionalidad) para jugador e IA.
 - [x] Configurar caché nativa (`src/cache/mod.rs` con `postcard` + `lz4_flex`) para pre-cocinado binario del mapa 3D y `ProvinceGraph`, `wgpu::PipelineCache`, bytecode precompilado de Lua 5.4 (`provinces_latam`, `countries_latam`, `game_rules`) y buffer temporal de Crónica, gráficas históricas y miniaturas.
+- [x] Implementar macroeconomía realista (Regla de Taylor, Curva de Phillips, pass-through cambiario, prima de riesgo y ciclo global), coaliciones parlamentarias sobre la mesa circular del Congreso, eventos por causas reales y ciclo empresarial bidireccional (exportaciones, impuestos, recortes y quiebras).
+- [x] Implementar **Ministro de Relaciones Exteriores** asignable mediante popup dedicado, con estadísticas aleatorias (mejora de relaciones y probabilidades de Acuerdo de Paz, Paz Blanca, Alianza y Pacto de No Agresión) y ejecución instantánea de misiones en **0 días**.
+- [x] Implementar **presupuesto militar real para la IA** (`ai_military_budget_m`), tope de tropas objetivo (paz vs. guerra), límite fiscal de mantenimiento, enfriamiento de reclutamiento y refuerzo de divisiones existentes sin spam.
 - [ ] Expandir el modelo de datos en Rust/Lua para gestionar infraestructura e impuestos específicos a nivel de **provincia**.
 - [ ] Evaluar migración de arquitectura principal exclusiva a **64 bits (`arm64-v8a`)** conforme crezca la complejidad de mallas 3D y memoria.
 
 ## Fase 4 — Profundidad Estratégica y Militar
 - [ ] Combate táctico automático entre divisiones enemigas al coincidir en provincias disputadas, logística y suministro.
 - [ ] Árbol de Enfoque nacional/regional en Lua 5.4 con pantalla dedicada y efectos progresivos.
-- [ ] Sistema profundo de coaliciones parlamentarias, mociones de censura, proyectos de ley votados sobre la mesa circular, reemplazo generacional de líderes y bancos centrales.
+- [ ] Mociones de censura y votaciones de proyectos de ley individuales por partido sobre la mesa circular del Congreso.
 - [ ] Guardado de partidas completo (`savegame`) aprovechando `postcard` + `lz4_flex` para campañas largas de varias décadas.
 - [ ] Publicación de APK estable en tiendas de terceros (Uptodown).
