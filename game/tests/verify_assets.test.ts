@@ -156,6 +156,9 @@ test('GitHub Action de APK Debug está en /.github/workflows/, es manual, descar
   const yml = fs.readFileSync(path.resolve('.github/workflows/android_apk.yml'), 'utf8');
   assert.ok(yml.includes('workflow_dispatch:'), 'Debe ser activable manualmente');
   assert.equal(/^\s*(push|pull_request|schedule):/m.test(yml), false, 'Nunca debe activarse con commits/push');
+  assert.equal(yml.includes('github.run_id'), false, 'No debe incluir github.run_id en la clave de caché o multiplicará cachés en cada ejecución');
+  assert.ok(yml.includes('actions: write'), 'android_apk.yml necesita actions: write para sobrescribir caché previa');
+  assert.ok(yml.includes('gh cache delete'), 'android_apk.yml debe limpiar la caché anterior antes de guardar una nueva');
   assert.ok(yml.includes('gh release download'), 'Debe descargar mapa 3D y provincias desde Release');
   assert.ok(yml.includes('actions/cache/restore@v5'), 'Debe restaurar caché');
   assert.ok(yml.includes('actions/cache/save@v5'), 'Debe guardar caché obligatoriamente');
@@ -164,6 +167,12 @@ test('GitHub Action de APK Debug está en /.github/workflows/, es manual, descar
   assert.ok(yml.includes('arm64-v8a'), 'Debe incluir build 64 bits');
   assert.ok(yml.includes('armeabi-v7a'), 'Debe incluir build 32 bits');
   assert.ok(yml.includes('HorizonteLatam-debug-${{ matrix.arch_label }}-${{ matrix.abi }}'), 'Debe subir cada arquitectura por separado');
+
+  const cleanYml = fs.readFileSync(path.resolve('.github/workflows/clean_cache.yml'), 'utf8');
+  assert.ok(cleanYml.includes('workflow_dispatch:'), 'clean_cache.yml debe ser exclusivamente manual');
+  assert.equal(/^\s*(push|pull_request|schedule):/m.test(cleanYml), false, 'clean_cache.yml nunca debe activarse automáticamente');
+  assert.ok(cleanYml.includes('actions: write'), 'clean_cache.yml debe tener permiso actions: write');
+  assert.ok(cleanYml.includes('gh cache delete --all'), 'clean_cache.yml debe poder limpiar todas las cachés');
 });
 
 test('Existen los 6 archivos de documentación en la raíz del proyecto', () => {

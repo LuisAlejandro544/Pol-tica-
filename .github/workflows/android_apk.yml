@@ -15,9 +15,15 @@ on:
         required: true
         default: "latest"
         type: string
+      force_refresh_cache:
+        description: "¿Sobrescribir la caché existente de esta compilación?"
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
+  actions: write
 
 jobs:
   build-apk-debug:
@@ -94,9 +100,8 @@ jobs:
             game/target
             ~/.gradle/caches
             ~/.gradle/wrapper
-          key: apk-debug-${{ matrix.abi }}-${{ hashFiles('game/Cargo.toml', 'game/rust-toolchain.toml', 'game/android/**/*.kts') }}-${{ github.run_id }}
+          key: apk-debug-${{ matrix.abi }}-${{ hashFiles('game/Cargo.toml', 'game/rust-toolchain.toml', 'game/android/**/*.kts') }}
           restore-keys: |
-            apk-debug-${{ matrix.abi }}-${{ hashFiles('game/Cargo.toml', 'game/rust-toolchain.toml', 'game/android/**/*.kts') }}-
             apk-debug-${{ matrix.abi }}-
 
       - name: Instalar dependencias Rust (cargo-ndk y dependencias del crate)
@@ -118,8 +123,19 @@ jobs:
             -PrustProfile=debug \
             --no-daemon
 
-      - name: Guardar caché obligatoria (siempre se guarda)
-        if: always()
+      - name: Limpiar caché anterior de esta ABI para sobrescribir sin acumular
+        if: always() && (steps.restore-cache.outputs.cache-hit != 'true' || inputs.force_refresh_cache)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          IDS=$(gh cache list --repo "$GITHUB_REPOSITORY" --limit 100 --json id,key --jq '.[] | select(.key | startswith("apk-debug-${{ matrix.abi }}-")) | .id' || true)
+          for id in $IDS; do
+            echo "Eliminando caché previa $id de ${{ matrix.abi }} para sobrescribir..."
+            gh cache delete "$id" --repo "$GITHUB_REPOSITORY" || true
+          done
+
+      - name: Guardar caché obligatoria (una sola por ABI)
+        if: always() && (steps.restore-cache.outputs.cache-hit != 'true' || inputs.force_refresh_cache)
         uses: actions/cache/save@v5
         with:
           path: |
@@ -130,7 +146,7 @@ jobs:
             game/target
             ~/.gradle/caches
             ~/.gradle/wrapper
-          key: apk-debug-${{ matrix.abi }}-${{ hashFiles('game/Cargo.toml', 'game/rust-toolchain.toml', 'game/android/**/*.kts') }}-${{ github.run_id }}
+          key: apk-debug-${{ matrix.abi }}-${{ hashFiles('game/Cargo.toml', 'game/rust-toolchain.toml', 'game/android/**/*.kts') }}
 
       - name: Renombrar APK Debug para arquitectura ${{ matrix.arch_label }}
         run: |

@@ -1,0 +1,69 @@
+# Propósito del archivo:
+# GitHub Action EXCLUSIVAMENTE MANUAL (`workflow_dispatch`) para limpiar
+# las cachés acumuladas de GitHub Actions en el repositorio (Cargo, Gradle,
+# Blender) y liberar el límite de 10 GB.
+
+name: Limpiar Caché de Actions (Manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: "¿Qué cachés deseas eliminar?"
+        required: true
+        default: "all"
+        type: choice
+        options:
+          - all
+          - apk-only
+          - blender-only
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  clean-actions-cache:
+    name: Limpiar Caché (${{ inputs.scope }})
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mostrar uso actual de caché
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "=== Uso actual de caché ==="
+          gh api "repos/${GITHUB_REPOSITORY}/actions/cache/usage" || true
+          echo "=== Cachés registradas ==="
+          gh cache list --repo "$GITHUB_REPOSITORY" --limit 100 || true
+
+      - name: Eliminar cachés seleccionadas (${{ inputs.scope }})
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SCOPE: ${{ inputs.scope }}
+        run: |
+          if [ "$SCOPE" = "all" ]; then
+            echo "Eliminando TODAS las cachés de GitHub Actions..."
+            gh cache delete --all --repo "$GITHUB_REPOSITORY" --succeed-on-no-caches
+          elif [ "$SCOPE" = "apk-only" ]; then
+            echo "Eliminando cachés de compilación APK (apk-debug-*)..."
+            IDS=$(gh cache list --repo "$GITHUB_REPOSITORY" --limit 100 --json id,key --jq '.[] | select(.key | startswith("apk-debug-")) | .id' || true)
+            for id in $IDS; do
+              echo "Eliminando caché ID $id..."
+              gh cache delete "$id" --repo "$GITHUB_REPOSITORY"
+            done
+          elif [ "$SCOPE" = "blender-only" ]; then
+            echo "Eliminando cachés de Blender (blender-*)..."
+            IDS=$(gh cache list --repo "$GITHUB_REPOSITORY" --limit 100 --json id,key --jq '.[] | select(.key | startswith("blender-")) | .id' || true)
+            for id in $IDS; do
+              echo "Eliminando caché ID $id..."
+              gh cache delete "$id" --repo "$GITHUB_REPOSITORY"
+            done
+          fi
+
+      - name: Verificar espacio liberado
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "=== Uso final de caché ==="
+          gh api "repos/${GITHUB_REPOSITORY}/actions/cache/usage" || true
+          gh cache list --repo "$GITHUB_REPOSITORY" --limit 100 || true
