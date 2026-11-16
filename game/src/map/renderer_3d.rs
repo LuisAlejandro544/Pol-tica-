@@ -480,7 +480,6 @@ impl egui_wgpu::CallbackTrait for Map3dPaintCallback {
                         }),
                         store: wgpu::StoreOp::Store,
                     },
-                    depth_slice: None,
                 })],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &res.depth_view,

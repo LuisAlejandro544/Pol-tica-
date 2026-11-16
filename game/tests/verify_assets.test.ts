@@ -69,6 +69,7 @@ test('Correcciones Rust: AI MilitaryState, U16 GLB colors, Window max_width, Str
   const chrome = fs.readFileSync(path.resolve('game/src/ui/components/chrome.rs'), 'utf8');
   const mapScreen = fs.readFileSync(path.resolve('game/src/ui/screens/map_screen.rs'), 'utf8');
   const cargoCfg = fs.readFileSync(path.resolve('game/.cargo/config.toml'), 'utf8');
+  const renderer3d = fs.readFileSync(path.resolve('game/src/map/renderer_3d.rs'), 'utf8');
 
   assert.equal(ai.includes('economy.defense_budget_pct'), false, 'defense_budget_pct pertenece a MilitaryState');
   assert.ok(ai.includes('country.military.defense_budget_pct'));
@@ -76,6 +77,7 @@ test('Correcciones Rust: AI MilitaryState, U16 GLB colors, Window max_width, Str
   assert.ok(glbLoader.includes('ReadColors::RgbU16') && glbLoader.includes('ReadColors::RgbaU16'));
   assert.equal(chrome.includes('.fixed_width('), false, 'egui::Window no tiene .fixed_width()');
   assert.equal(mapScreen.includes('.fixed_width('), false, 'egui::Window no tiene .fixed_width()');
+  assert.equal(renderer3d.includes('depth_slice:'), false, 'wgpu 25 RenderPassColorAttachment no tiene depth_slice');
   assert.equal(/\+neon|\+vfp3/.test(cargoCfg), false, 'No usar -C target-feature=+neon,+vfp3 inestable en Rust estable');
 
   // Verifica que ningún archivo UI use literales flotantes sin sufijo _f32 en Stroke::new(...)
