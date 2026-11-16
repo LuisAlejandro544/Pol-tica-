@@ -34,12 +34,43 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y lua5.4 curl xz-utils libxi6 libxxf86vm1 libxfixes3 libxrender1 libgl1 libxkbcommon0
 
+      - name: Caché de Blender 4.3.2
+        id: cache-blender
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/blender
+          key: blender-linux-x64-4.3.2
+
       - name: Instalar Blender 4.3 LTS (headless)
         run: |
           BLENDER_VER="4.3.2"
-          curl -sSL "https://download.blender.org/release/Blender4.3/blender-${BLENDER_VER}-linux-x64.tar.xz" -o /tmp/blender.tar.xz
-          tar -xf /tmp/blender.tar.xz -C /opt
-          sudo ln -sf "/opt/blender-${BLENDER_VER}-linux-x64/blender" /usr/local/bin/blender
+          BLENDER_ROOT="$HOME/.local/share/blender"
+          BLENDER_DIR="$BLENDER_ROOT/blender-${BLENDER_VER}-linux-x64"
+          mkdir -p "$BLENDER_ROOT"
+          if [ ! -x "$BLENDER_DIR/blender" ]; then
+            URLS=(
+              "https://mirror.clarkson.edu/blender/release/Blender4.3/blender-${BLENDER_VER}-linux-x64.tar.xz"
+              "https://download.blender.org/release/Blender4.3/blender-${BLENDER_VER}-linux-x64.tar.xz"
+            )
+            DOWNLOADED=0
+            for url in "${URLS[@]}"; do
+              echo "Intentando descargar Blender desde: $url"
+              if curl -fSL --retry 3 --retry-delay 5 -A "Mozilla/5.0" "$url" -o /tmp/blender.tar.xz; then
+                if xz -t /tmp/blender.tar.xz; then
+                  DOWNLOADED=1
+                  break
+                fi
+              fi
+              rm -f /tmp/blender.tar.xz
+            done
+            if [ "$DOWNLOADED" -ne 1 ]; then
+              echo "No se pudo descargar un paquete .tar.xz válido de Blender" >&2
+              exit 1
+            fi
+            tar -xf /tmp/blender.tar.xz -C "$BLENDER_ROOT"
+            rm -f /tmp/blender.tar.xz
+          fi
+          sudo ln -sf "$BLENDER_DIR/blender" /usr/local/bin/blender
           blender --version
 
       - name: Paso Lua 5.4 — Exportar metadatos y colores desde countries_latam.lua
