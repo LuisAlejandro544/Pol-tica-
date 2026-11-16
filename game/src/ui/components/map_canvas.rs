@@ -1,18 +1,19 @@
 //! Propósito del archivo:
-//! Componente interactivo reutilizable del visor cartográfico de Latinoamérica.
-//! Renderiza en 3D real (`wgpu` + `latinoamerica_3d.glb`) con pan táctil, zoom por pellizco/rueda,
-//! rotación/inclinación 3D, modos dinámicos de mapa y raycasting exacto por provincia y país.
-//! Mantiene respaldo automático al mapa SVG 2D si el archivo `.glb` no está presente.
+//! Componente interactivo reutilizable del visor cartográfico 3D de Latinoamérica.
+//! Renderiza exclusivamente en 3D real (`wgpu 25` + `latinoamerica_3d.glb`) con pan táctil,
+//! zoom por pellizco/rueda, rotación/inclinación 3D, modos dinámicos de mapa y raycasting
+//! exacto por provincia y país. Sin respaldo 2D SVG.
 
 use crate::map::renderer_3d::{srgb_u8_to_linear, Map3dCamera, Map3dPaintCallback, MapUniforms};
-use crate::map::{Latam3dScene, LatamVectorMap};
+use crate::map::Latam3dScene;
 use crate::models::{GameState, MapMode};
 use crate::ui::theme::{
-    ACCENT_CRIMSON, ACCENT_CYAN, ACCENT_EMERALD, ACCENT_GOLD, BG_DEEP, BORDER_SUBTLE, TEXT_PRIMARY,
+    ACCENT_CRIMSON, ACCENT_CYAN, ACCENT_EMERALD, ACCENT_GOLD, BORDER_SUBTLE, TEXT_MUTED,
+    TEXT_PRIMARY,
 };
 use eframe::egui_wgpu::{self, wgpu};
-use egui::{Color32, FontId, Mesh, Pos2, Rect, Sense, Shape, Stroke, Ui, Vec2};
-use std::sync::atomic::{AtomicBool, Ordering};
+use egui::{Color32, Rect, RichText, Sense, Stroke, Ui, Vec2};
+use parking_lot::Mutex;
 use std::sync::Arc;
 
 pub struct MapPickHit {
@@ -36,41 +37,13 @@ impl Default for MapViewportState {
     }
 }
 
-/// Dibuja el mapa 3D (o respaldo SVG 2D) y devuelve el país y provincia tocados si hubo tap/clic.
+/// Dibuja el visor 3D (`wgpu`) y devuelve el país y provincia tocados si hubo tap/clic.
 pub fn render_latam_map(
     ui: &mut Ui,
     scene_3d: Option<&Latam3dScene>,
     target_format: wgpu::TextureFormat,
-    gpu_3d_failed: &Arc<AtomicBool>,
-    vector_map: &LatamVectorMap,
-    state: &GameState,
-    map_mode: MapMode,
-    viewport: &mut MapViewportState,
-) -> Option<MapPickHit> {
-    if let Some(scene) = scene_3d {
-        if !gpu_3d_failed.load(Ordering::Relaxed)
-            && !scene.vertices.is_empty()
-            && !scene.indices.is_empty()
-        {
-            return render_latam_map_3d(
-                ui,
-                scene,
-                target_format,
-                gpu_3d_failed,
-                state,
-                map_mode,
-                viewport,
-            );
-        }
-    }
-    render_latam_map_2d(ui, vector_map, state, map_mode, viewport)
-}
-
-fn render_latam_map_3d(
-    ui: &mut Ui,
-    scene: &Latam3dScene,
-    target_format: wgpu::TextureFormat,
-    gpu_3d_failed: &Arc<AtomicBool>,
+    gpu_info: &str,
+    gpu_3d_error: &Arc<Mutex<Option<String>>>,
     state: &GameState,
     map_mode: MapMode,
     viewport: &mut MapViewportState,
@@ -83,6 +56,60 @@ fn render_latam_map_3d(
     let (rect, response) = ui.allocate_exact_size(safe_size, Sense::click_and_drag());
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 8.0, Color32::from_rgb(8, 22, 38));
+
+    let Some(scene) = scene_3d else {
+        painter.rect_stroke(
+            rect,
+            8.0,
+            Stroke::new(1.5_f32, BORDER_SUBTLE),
+            egui::StrokeKind::Inside,
+        );
+        let msg_rect = rect.shrink(16.0);
+        let mut msg_ui = ui.new_child(egui::UiBuilder::new().max_rect(msg_rect));
+        msg_ui.vertical(|ui| {
+            ui.label(
+                RichText::new("No se encontró el modelo 3D latinoamerica_3d.glb")
+                    .strong()
+                    .color(ACCENT_CRIMSON),
+            );
+            ui.label(
+                RichText::new(format!("GPU: {gpu_info} • Formato: {target_format:?}"))
+                    .size(12.0)
+                    .color(TEXT_MUTED),
+            );
+        });
+        return None;
+    };
+
+    if let Some(err) = gpu_3d_error.lock().clone() {
+        painter.rect_stroke(
+            rect,
+            8.0,
+            Stroke::new(1.5_f32, ACCENT_CRIMSON),
+            egui::StrokeKind::Inside,
+        );
+        let msg_rect = rect.shrink(16.0);
+        let mut msg_ui = ui.new_child(egui::UiBuilder::new().max_rect(msg_rect));
+        msg_ui.vertical(|ui| {
+            ui.label(
+                RichText::new("Error en visor 3D (wgpu)")
+                    .strong()
+                    .color(ACCENT_CRIMSON),
+            );
+            ui.label(
+                RichText::new(format!("GPU: {gpu_info} • Formato: {target_format:?}"))
+                    .size(12.0)
+                    .color(TEXT_MUTED),
+            );
+            ui.add_space(6.0);
+            ui.label(RichText::new(err).size(12.5).color(TEXT_PRIMARY));
+            ui.add_space(10.0);
+            if ui.button("Reintentar Visor 3D").clicked() {
+                *gpu_3d_error.lock() = None;
+            }
+        });
+        return None;
+    }
 
     // Gestos táctiles y de ratón sobre el visor 3D
     if response.hovered() {
@@ -164,7 +191,7 @@ fn render_latam_map_3d(
                 uniforms,
                 target_format,
                 viewport_px: [vp_w, vp_h],
-                gpu_3d_failed: Arc::clone(gpu_3d_failed),
+                gpu_3d_error: Arc::clone(gpu_3d_error),
             },
         );
         painter.add(callback);
@@ -223,138 +250,6 @@ fn render_latam_map_3d(
                 return Some(MapPickHit {
                     country_id: country_id.to_string(),
                     province_mesh: Some(mesh_name.to_string()),
-                });
-            }
-        }
-    }
-
-    None
-}
-
-/// Respaldo vectorial 2D desde `latinoamerica.svg` cuando no hay modelo `.glb` cargado.
-fn render_latam_map_2d(
-    ui: &mut Ui,
-    vector_map: &LatamVectorMap,
-    state: &GameState,
-    map_mode: MapMode,
-    viewport: &mut MapViewportState,
-) -> Option<MapPickHit> {
-    let available = ui.available_size();
-    let safe_size = Vec2::new(
-        if available.x.is_finite() { available.x.max(16.0) } else { 320.0 },
-        if available.y.is_finite() { available.y.max(16.0) } else { 240.0 },
-    );
-    let (rect, response) = ui.allocate_exact_size(safe_size, Sense::click_and_drag());
-
-    let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, 8.0, Color32::from_rgb(10, 26, 44));
-    painter.rect_stroke(
-        rect,
-        8.0,
-        Stroke::new(1.5_f32, BORDER_SUBTLE),
-        egui::StrokeKind::Inside,
-    );
-
-    if response.dragged() {
-        viewport.pan += response.drag_delta();
-    }
-    let scroll_delta = ui.input(|i| i.smooth_scroll_delta.y);
-    if response.hovered() && scroll_delta.abs() > 0.1 {
-        let factor = (1.0 + scroll_delta * 0.002).clamp(0.8, 1.25);
-        viewport.zoom = (viewport.zoom * factor).clamp(0.75, 4.5);
-    }
-
-    let base_scale = ((rect.width() / vector_map.width.max(1.0))
-        .min(rect.height() / vector_map.height.max(1.0))
-        * 0.94)
-        .max(0.05);
-    let scale = base_scale * viewport.zoom;
-    let map_pixel_size = Vec2::new(vector_map.width * scale, vector_map.height * scale);
-    let origin = rect.center() - map_pixel_size * 0.5 + viewport.pan;
-
-    let to_screen =
-        |svg_p: Pos2| -> Pos2 { Pos2::new(origin.x + svg_p.x * scale, origin.y + svg_p.y * scale) };
-    let to_svg =
-        |scr_p: Pos2| -> Pos2 { Pos2::new((scr_p.x - origin.x) / scale, (scr_p.y - origin.y) / scale) };
-
-    let grid_color = Color32::from_rgba_unmultiplied(38, 78, 115, 65);
-    for gx in (0..=1000).step_by(100) {
-        let p0 = to_screen(Pos2::new(gx as f32, 0.0));
-        let p1 = to_screen(Pos2::new(gx as f32, vector_map.height));
-        painter.line_segment([p0, p1], Stroke::new(0.8_f32, grid_color));
-    }
-    for gy in (0..=1200).step_by(100) {
-        let p0 = to_screen(Pos2::new(0.0, gy as f32));
-        let p1 = to_screen(Pos2::new(vector_map.width, gy as f32));
-        painter.line_segment([p0, p1], Stroke::new(0.8_f32, grid_color));
-    }
-
-    for (id, mesh_data) in &vector_map.countries {
-        let is_selected = state.selected_country_id.as_deref() == Some(id.as_str());
-        let is_player = state.player_country_id.as_deref() == Some(id.as_str());
-
-        let fill = compute_country_fill(id, state, map_mode, is_selected, is_player);
-
-        let mut mesh = Mesh::default();
-        for &v in &mesh_data.triangles_vertices {
-            mesh.colored_vertex(to_screen(v), fill);
-        }
-        mesh.indices.extend_from_slice(&mesh_data.triangles_indices);
-        painter.add(Shape::mesh(mesh));
-
-        let screen_outline: Vec<Pos2> = mesh_data.outline.iter().map(|&p| to_screen(p)).collect();
-        let stroke = if is_selected {
-            Stroke::new(2.6_f32, ACCENT_GOLD)
-        } else if is_player {
-            Stroke::new(2.2_f32, ACCENT_CYAN)
-        } else {
-            Stroke::new(1.1_f32, BG_DEEP)
-        };
-        painter.add(Shape::closed_line(screen_outline, stroke));
-
-        let bbox_w = (mesh_data.bbox_max.x - mesh_data.bbox_min.x) * scale;
-        if bbox_w > 22.0 || is_selected || is_player {
-            let label_pos = to_screen(mesh_data.centroid);
-            let label = if bbox_w > 78.0 {
-                mesh_data.display_name.as_str()
-            } else {
-                id.as_str()
-            };
-            painter.text(
-                label_pos,
-                egui::Align2::CENTER_CENTER,
-                label,
-                FontId::proportional((10.5 * viewport.zoom.sqrt()).clamp(9.0, 15.0)),
-                TEXT_PRIMARY,
-            );
-        }
-    }
-
-    let btn_rect = Rect::from_min_size(
-        rect.right_bottom() - Vec2::new(136.0, 44.0),
-        Vec2::new(124.0, 34.0),
-    );
-    let mut ui_child = ui.new_child(egui::UiBuilder::new().max_rect(btn_rect));
-    ui_child.horizontal(|ui| {
-        if ui.small_button(" + ").clicked() {
-            viewport.zoom = (viewport.zoom * 1.22).min(4.5);
-        }
-        if ui.small_button(" - ").clicked() {
-            viewport.zoom = (viewport.zoom / 1.22).max(0.75);
-        }
-        if ui.small_button("Centrar").clicked() {
-            viewport.zoom = 1.0;
-            viewport.pan = Vec2::ZERO;
-        }
-    });
-
-    if response.clicked() {
-        if let Some(pointer_pos) = response.interact_pointer_pos() {
-            let svg_pos = to_svg(pointer_pos);
-            if let Some(hit_id) = vector_map.hit_test(svg_pos) {
-                return Some(MapPickHit {
-                    country_id: hit_id.to_string(),
-                    province_mesh: None,
                 });
             }
         }

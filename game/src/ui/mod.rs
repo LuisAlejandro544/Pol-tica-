@@ -11,7 +11,7 @@ pub mod theme;
 
 use crate::engine::{SimResponse, SimulationWorker};
 use crate::lua_bridge::LuaEngine;
-use crate::map::{Latam3dScene, LatamVectorMap};
+use crate::map::Latam3dScene;
 use crate::models::{
     CapitalMarkerData, Difficulty, GameState, MapMode, ProvinceData, ScreenRoute,
 };
@@ -29,8 +29,8 @@ use crate::ui::screens::politics_screen::render_politics_screen;
 use crate::ui::screens::settings_screen::{render_settings_screen, SettingsAction};
 use crate::ui::theme::apply_tactical_theme;
 use eframe::egui_wgpu::wgpu;
+use parking_lot::Mutex;
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -38,11 +38,10 @@ pub struct HorizonteLatamApp {
     pub route: ScreenRoute,
     pub scene_3d: Option<Latam3dScene>,
     pub target_format: wgpu::TextureFormat,
-    pub use_3d_map: bool,
-    pub gpu_3d_failed: Arc<AtomicBool>,
+    pub gpu_info: String,
+    pub gpu_3d_error: Arc<Mutex<Option<String>>>,
     pub provinces_catalog: BTreeMap<String, ProvinceData>,
     pub capitals_catalog: Vec<CapitalMarkerData>,
-    pub vector_map: LatamVectorMap,
     pub state: GameState,
     pub worker: SimulationWorker,
     pub map_mode: MapMode,
@@ -56,20 +55,28 @@ pub struct HorizonteLatamApp {
 
 impl HorizonteLatamApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        let target_format = cc
+        let (target_format, gpu_info) = cc
             .wgpu_render_state
             .as_ref()
-            .map(|rs| rs.target_format)
-            .unwrap_or(wgpu::TextureFormat::Bgra8UnormSrgb);
-
-        let vector_map = LatamVectorMap::load_embedded()
-            .expect("No se pudo cargar assets/maps/latinoamerica.svg");
+            .map(|rs| {
+                let info = rs.adapter.get_info();
+                (
+                    rs.target_format,
+                    format!("{} ({:?})", info.name, info.backend),
+                )
+            })
+            .unwrap_or_else(|| {
+                (
+                    wgpu::TextureFormat::Rgba8UnormSrgb,
+                    "wgpu pendiente de superficie".to_string(),
+                )
+            });
 
         let mut startup_err = None;
         let scene_3d = match Latam3dScene::load_embedded_or_disk() {
             Ok(scene) => scene,
             Err(err) => {
-                log::warn!("No se pudo inicializar el mapa 3D GLB, usando respaldo SVG: {err}");
+                log::error!("No se pudo inicializar el mapa 3D GLB: {err}");
                 startup_err = Some(err);
                 None
             }
@@ -101,17 +108,14 @@ impl HorizonteLatamApp {
             chronicle: Vec::new(),
         };
 
-        let use_3d_map = scene_3d.is_some();
-
         Self {
             route: ScreenRoute::MainMenu,
             scene_3d,
             target_format,
-            use_3d_map,
-            gpu_3d_failed: Arc::new(AtomicBool::new(false)),
+            gpu_info,
+            gpu_3d_error: Arc::new(Mutex::new(None)),
             provinces_catalog,
             capitals_catalog,
-            vector_map,
             state: placeholder_state,
             worker,
             map_mode: MapMode::Political,
@@ -180,25 +184,13 @@ impl eframe::App for HorizonteLatamApp {
             self.theme_initialized = true;
         }
 
-        let mut has_wgpu_state = false;
         if let Some(rs) = frame.wgpu_render_state() {
             self.target_format = rs.target_format;
-            has_wgpu_state = true;
-        }
-
-        if self.gpu_3d_failed.load(Ordering::Relaxed) && self.use_3d_map {
-            self.use_3d_map = false;
-            if self.last_error.is_none() {
-                self.last_error = Some(
-                    "GPU móvil incompatible con visor 3D; activado respaldo vectorial 2D."
-                        .to_string(),
-                );
+            if self.gpu_info.starts_with("wgpu pendiente") {
+                let info = rs.adapter.get_info();
+                self.gpu_info = format!("{} ({:?})", info.name, info.backend);
             }
-            ctx.request_repaint();
         }
-
-        let allow_3d =
-            self.use_3d_map && has_wgpu_state && !self.gpu_3d_failed.load(Ordering::Relaxed);
 
         self.poll_worker_responses();
         self.maybe_auto_advance_turn(ctx);
@@ -264,13 +256,12 @@ impl eframe::App for HorizonteLatamApp {
                     }
                 }
                 ScreenRoute::CountrySelect => {
-                    let active_scene_3d = if allow_3d { self.scene_3d.as_ref() } else { None };
                     match render_country_select(
                         ui,
-                        active_scene_3d,
+                        self.scene_3d.as_ref(),
                         self.target_format,
-                        &self.gpu_3d_failed,
-                        &self.vector_map,
+                        &self.gpu_info,
+                        &self.gpu_3d_error,
                         &mut self.state,
                         &mut self.map_viewport,
                     ) {
@@ -285,7 +276,7 @@ impl eframe::App for HorizonteLatamApp {
                                 .get(&country_id)
                                 .map(|c| c.name.clone())
                                 .unwrap_or_else(|| country_id.clone());
-                            if let Some(scene) = active_scene_3d {
+                            if let Some(scene) = self.scene_3d.as_ref() {
                                 if let Some(center) = scene.country_center(&country_id) {
                                     self.map_viewport.camera_3d.focus_point(center, 28.0);
                                 }
@@ -301,13 +292,12 @@ impl eframe::App for HorizonteLatamApp {
                     }
                 }
                 ScreenRoute::WorldMap => {
-                    let active_scene_3d = if allow_3d { self.scene_3d.as_ref() } else { None };
                     let res = render_map_screen(
                         ui,
-                        active_scene_3d,
+                        self.scene_3d.as_ref(),
                         self.target_format,
-                        &self.gpu_3d_failed,
-                        &self.vector_map,
+                        &self.gpu_info,
+                        &self.gpu_3d_error,
                         &self.provinces_catalog,
                         &mut self.state,
                         &mut self.map_mode,
@@ -324,13 +314,11 @@ impl eframe::App for HorizonteLatamApp {
                 ScreenRoute::Diplomacy => render_diplomacy_screen(ui, &mut self.state),
                 ScreenRoute::Military => render_military_screen(ui, &mut self.state),
                 ScreenRoute::Settings => {
-                    let has_3d =
-                        self.scene_3d.is_some() && !self.gpu_3d_failed.load(Ordering::Relaxed);
                     match render_settings_screen(
                         ui,
                         &mut self.state,
-                        has_3d,
-                        &mut self.use_3d_map,
+                        &self.gpu_info,
+                        self.target_format,
                     ) {
                         SettingsAction::None => {}
                         SettingsAction::ReturnToMap => {

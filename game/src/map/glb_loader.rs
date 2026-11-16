@@ -19,7 +19,7 @@ pub struct Vertex3D {
     pub color: [f32; 4],
     /// meta[0] = country_slot (-1 para entorno/capitales, 0..31 para provincias)
     /// meta[1] = province_slot (-1 si no es provincia)
-    pub meta: [i32; 2],
+    pub meta: [f32; 2],
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -358,7 +358,7 @@ fn visit_node(
                     position: wp.to_array(),
                     normal: wn.to_array(),
                     color: col,
-                    meta: [country_slot, province_slot],
+                    meta: [country_slot as f32, province_slot as f32],
                 });
 
                 if is_province {

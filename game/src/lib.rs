@@ -13,6 +13,24 @@ pub mod ui;
 
 use crate::ui::HorizonteLatamApp;
 
+fn build_wgpu_options() -> eframe::egui_wgpu::WgpuConfiguration {
+    let mut wgpu_options = eframe::egui_wgpu::WgpuConfiguration::default();
+    if let eframe::egui_wgpu::WgpuSetup::CreateNew(ref mut setup) = wgpu_options.wgpu_setup {
+        setup.power_preference = eframe::egui_wgpu::wgpu::PowerPreference::HighPerformance;
+        setup.instance_descriptor.backends = eframe::egui_wgpu::wgpu::Backends::VULKAN
+            | eframe::egui_wgpu::wgpu::Backends::GL;
+        setup.device_descriptor = std::sync::Arc::new(|adapter| {
+            eframe::egui_wgpu::wgpu::DeviceDescriptor {
+                label: Some("horizonte_latam_gpu"),
+                required_features: eframe::egui_wgpu::wgpu::Features::empty(),
+                required_limits: adapter.limits(),
+                ..Default::default()
+            }
+        });
+    }
+    wgpu_options
+}
+
 /// Punto de entrada nativo para Android (`NativeActivity` en 32-bit y 64-bit).
 #[cfg(target_os = "android")]
 #[unsafe(no_mangle)]
@@ -26,6 +44,7 @@ pub extern "C" fn android_main(app: android_activity::AndroidApp) {
     let options = eframe::NativeOptions {
         android_app: Some(app),
         renderer: eframe::Renderer::Wgpu,
+        wgpu_options: build_wgpu_options(),
         viewport: egui::ViewportBuilder::default().with_fullscreen(true),
         ..Default::default()
     };
@@ -44,6 +63,7 @@ pub extern "C" fn android_main(app: android_activity::AndroidApp) {
 pub fn run_desktop() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,
+        wgpu_options: build_wgpu_options(),
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1280.0, 720.0])
             .with_title("Horizonte Latam — Estrategia 3D (Rust + wgpu + Lua 5.4)"),

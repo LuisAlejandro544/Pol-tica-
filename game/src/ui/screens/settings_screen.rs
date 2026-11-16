@@ -16,8 +16,8 @@ pub enum SettingsAction {
 pub fn render_settings_screen(
     ui: &mut Ui,
     state: &mut GameState,
-    has_3d_scene: bool,
-    use_3d_map: &mut bool,
+    gpu_info: &str,
+    target_format: eframe::egui_wgpu::wgpu::TextureFormat,
 ) -> SettingsAction {
     let mut action = SettingsAction::None;
 
@@ -53,24 +53,12 @@ pub fn render_settings_screen(
                         }
                     });
 
-                    ui.add_space(10.0);
-                    ui.label(RichText::new("Modo del Visor Cartográfico").strong());
-                    ui.horizontal(|ui| {
-                        if has_3d_scene {
-                            if ui.selectable_label(*use_3d_map, "Mapa 3D (wgpu)").clicked() {
-                                *use_3d_map = true;
-                            }
-                        }
-                        if ui.selectable_label(!*use_3d_map, "Mapa 2D (SVG táctil)").clicked() {
-                            *use_3d_map = false;
-                        }
-                    });
-
                     ui.add_space(12.0);
                     ui.label(
-                        RichText::new("Arquitectura: Interfaz Rust (egui/eframe + wgpu) + Lua 5.4 + NativeActivity Android")
+                        RichText::new("Arquitectura: Interfaz Rust (egui/eframe + wgpu 3D) + Lua 5.4 + NativeActivity Android")
                             .color(ACCENT_CYAN),
                     );
+                    ui.label(format!("GPU 3D activa: {gpu_info} • Superficie: {target_format:?}"));
                     ui.label("Soporte nativo ABI: 64-bit (arm64-v8a / x86_64) y 32-bit (armeabi-v7a).");
                     ui.add_space(14.0);
 

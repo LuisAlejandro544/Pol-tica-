@@ -5,7 +5,7 @@
 //! - Centro: Mapa interactivo 3D (o respaldo SVG 2D) para explorar y tocar países.
 //! - Derecha: Dossier deslizable con indicadores, partidos y botón para iniciar campaña.
 
-use crate::map::{Latam3dScene, LatamVectorMap};
+use crate::map::Latam3dScene;
 use crate::models::{GameState, MapMode};
 use crate::ui::components::map_canvas::{render_latam_map, MapViewportState};
 use crate::ui::theme::{
@@ -15,7 +15,7 @@ use crate::ui::theme::{
 };
 use eframe::egui_wgpu::wgpu;
 use egui::{Align, Color32, Layout, RichText, Stroke, Ui};
-use std::sync::atomic::AtomicBool;
+use parking_lot::Mutex;
 use std::sync::Arc;
 
 pub enum CountrySelectAction {
@@ -28,8 +28,8 @@ pub fn render_country_select(
     ui: &mut Ui,
     scene_3d: Option<&Latam3dScene>,
     target_format: wgpu::TextureFormat,
-    gpu_3d_failed: &Arc<AtomicBool>,
-    vector_map: &LatamVectorMap,
+    gpu_info: &str,
+    gpu_3d_error: &Arc<Mutex<Option<String>>>,
     state: &mut GameState,
     viewport: &mut MapViewportState,
 ) -> CountrySelectAction {
@@ -137,7 +137,7 @@ pub fn render_country_select(
             },
         );
 
-        // 2. Visor interactivo 3D (o respaldo SVG)
+        // 2. Visor interactivo 3D (wgpu)
         ui.allocate_ui_with_layout(
             egui::vec2(map_w, col_h),
             Layout::top_down(Align::Min),
@@ -146,8 +146,8 @@ pub fn render_country_select(
                     ui,
                     scene_3d,
                     target_format,
-                    gpu_3d_failed,
-                    vector_map,
+                    gpu_info,
+                    gpu_3d_error,
                     state,
                     MapMode::Political,
                     viewport,

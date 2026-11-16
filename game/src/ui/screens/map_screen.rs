@@ -4,7 +4,7 @@
 //! deslizable de la IA local, a la derecha el visor 3D/SVG interactivo, y abre un
 //! popup deslizable (`Popup País`) al tocar una nación extranjera.
 
-use crate::map::{Latam3dScene, LatamVectorMap};
+use crate::map::Latam3dScene;
 use crate::models::{GameState, MapMode, ProvinceData, ScreenRoute};
 use crate::ui::components::map_canvas::{render_latam_map, MapViewportState};
 use crate::ui::theme::{
@@ -13,8 +13,8 @@ use crate::ui::theme::{
 };
 use eframe::egui_wgpu::wgpu;
 use egui::{Align, Layout, RichText, Stroke, Ui};
+use parking_lot::Mutex;
 use std::collections::BTreeMap;
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 pub struct MapScreenResult {
@@ -25,8 +25,8 @@ pub fn render_map_screen(
     ui: &mut Ui,
     scene_3d: Option<&Latam3dScene>,
     target_format: wgpu::TextureFormat,
-    gpu_3d_failed: &Arc<AtomicBool>,
-    vector_map: &LatamVectorMap,
+    gpu_info: &str,
+    gpu_3d_error: &Arc<Mutex<Option<String>>>,
     provinces_catalog: &BTreeMap<String, ProvinceData>,
     state: &mut GameState,
     map_mode: &mut MapMode,
@@ -126,8 +126,8 @@ pub fn render_map_screen(
                     ui,
                     scene_3d,
                     target_format,
-                    gpu_3d_failed,
-                    vector_map,
+                    gpu_info,
+                    gpu_3d_error,
                     state,
                     *map_mode,
                     viewport,

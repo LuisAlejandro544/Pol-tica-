@@ -239,27 +239,32 @@ test('UI móvil: scroll táctil habilitado, sin colisiones de ScrollArea ID y co
   assert.ok(mapScreen.includes('Layout::top_down'), 'map_screen debe usar Layout::top_down en sus columnas');
 });
 
-test('Protección anti-crash del visor 3D en Android (wgpu target_format vivo, límites GPU, catch_unwind y respaldo 2D)', () => {
+test('Visor 3D puro compatible con Mali-G52 (Vulkan, write_buffer, Float32x2, Depth24Plus y cero fallback SVG)', () => {
+  const libRs = fs.readFileSync(path.resolve('game/src/lib.rs'), 'utf8');
   const uiMod = fs.readFileSync(path.resolve('game/src/ui/mod.rs'), 'utf8');
   const renderer3d = fs.readFileSync(path.resolve('game/src/map/renderer_3d.rs'), 'utf8');
   const glbLoader = fs.readFileSync(path.resolve('game/src/map/glb_loader.rs'), 'utf8');
   const mapCanvas = fs.readFileSync(path.resolve('game/src/ui/components/map_canvas.rs'), 'utf8');
   const settings = fs.readFileSync(path.resolve('game/src/ui/screens/settings_screen.rs'), 'utf8');
 
+  assert.ok(libRs.includes('Backends::VULKAN'), 'lib.rs debe configurar Vulkan en wgpu_options');
+  assert.ok(libRs.includes('adapter.limits()'), 'lib.rs debe solicitar adapter.limits()');
   assert.ok(uiMod.includes('frame.wgpu_render_state()'), 'ui/mod.rs debe sincronizar target_format en cada frame');
-  assert.ok(uiMod.includes('gpu_3d_failed'), 'ui/mod.rs debe activar respaldo 2D automático si falla la GPU 3D');
-  assert.ok(uiMod.includes('let allow_3d ='), 'ui/mod.rs debe calcular allow_3d antes de prestar &mut self en CentralPanel');
+  assert.equal(uiMod.includes('LatamVectorMap'), false, 'ui/mod.rs no debe usar fallback SVG 2D');
+  assert.equal(mapCanvas.includes('render_latam_map_2d'), false, 'map_canvas.rs no debe tener fallback SVG 2D');
+  assert.equal(settings.includes('Mapa 2D (SVG'), false, 'settings_screen.rs no debe ofrecer modo 2D fallback');
   assert.ok(renderer3d.includes('sync_target_format'), 'renderer_3d.rs debe reconstruir blit_pipeline si cambia target_format');
-  assert.ok(renderer3d.includes('device.limits()'), 'renderer_3d.rs debe respetar límites de textura y buffer de la GPU móvil');
-  assert.ok(renderer3d.includes('catch_unwind'), 'renderer_3d.rs debe capturar panics de driver GPU sin cerrar la app');
+  assert.ok(renderer3d.includes('queue.write_buffer'), 'renderer_3d.rs debe subir buffers con queue.write_buffer en lugar de mapped_at_creation');
+  assert.ok(renderer3d.includes('Depth24Plus'), 'renderer_3d.rs debe usar Depth24Plus compatible con GPU móvil');
+  assert.ok(renderer3d.includes('VertexFormat::Float32x2'), 'renderer_3d.rs debe usar Float32x2 en meta');
   assert.equal(renderer3d.includes('positions[vid]'), false, 'SHADER_BLIT_WGSL no debe usar indexado dinámico en array local');
   assert.ok(glbLoader.includes('buffers.get(buffer.index()).map(|v| &**v)'), 'glb_loader.rs debe convertir Option<&Data> a Option<&[u8]>');
   assert.ok(glbLoader.includes('pm.positions.get('), 'glb_loader.rs debe usar indexado seguro con .get()');
   assert.ok(glbLoader.includes('raw_normals.get('), 'glb_loader.rs debe proteger lectura de normales');
   assert.ok(mapCanvas.includes('rect.is_positive()'), 'map_canvas.rs debe validar rect antes de crear PaintCallback');
-  assert.ok(settings.includes('Mapa 2D (SVG táctil)'), 'settings_screen.rs debe permitir alternar entre mapa 3D y 2D SVG');
 
   for (const file of [
+    'game/src/lib.rs',
     'game/src/ui/mod.rs',
     'game/src/map/renderer_3d.rs',
     'game/src/map/glb_loader.rs',

@@ -8,7 +8,7 @@ use crate::map::glb_loader::Vertex3D;
 use bytemuck::{Pod, Zeroable};
 use eframe::egui_wgpu::{self, wgpu};
 use glam::{Mat4, Vec3, Vec4};
-use std::sync::atomic::{AtomicBool, Ordering};
+use parking_lot::Mutex;
 use std::sync::Arc;
 
 #[derive(Debug, Clone)]
@@ -126,8 +126,8 @@ pub struct MapUniforms {
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
 struct BlitUniforms {
-    /// 1.0 si la superficie destino NO es sRGB (requiere codificación gamma manual)
-    encode_srgb: f32,
+    /// 1.0 si la superficie destino es sRGB (decodifica a lineal antes del encode hardware sRGB)
+    decode_srgb: f32,
     _pad: [f32; 3],
 }
 
@@ -137,12 +137,12 @@ pub struct Map3dPaintCallback {
     pub uniforms: MapUniforms,
     pub target_format: wgpu::TextureFormat,
     pub viewport_px: [u32; 2],
-    pub gpu_3d_failed: Arc<AtomicBool>,
+    pub gpu_3d_error: Arc<Mutex<Option<String>>>,
 }
 
 enum Map3dGpuState {
     Ready(Map3dGpuResources),
-    Failed,
+    Failed(String),
 }
 
 struct Map3dGpuResources {
@@ -172,6 +172,7 @@ struct Map3dGpuResources {
 impl Map3dGpuResources {
     fn try_new(
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         vertices: &[Vertex3D],
         indices: &[u32],
         initial_size: [u32; 2],
@@ -185,7 +186,7 @@ impl Map3dGpuResources {
         let ib_bytes = std::mem::size_of_val(indices) as u64;
         if vb_bytes > limits.max_buffer_size || ib_bytes > limits.max_buffer_size {
             return Err(format!(
-                "Buffers 3D exceden max_buffer_size ({})",
+                "Buffers 3D ({vb_bytes} / {ib_bytes} B) exceden max_buffer_size ({})",
                 limits.max_buffer_size
             ));
         }
@@ -197,13 +198,20 @@ impl Map3dGpuResources {
         ];
 
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            Self::new(device, vertices, indices, safe_size, target_format)
+            Self::new(device, queue, vertices, indices, safe_size, target_format)
         }))
-        .map_err(|_| "Fallo inicializando pipeline wgpu 3D en esta GPU móvil".to_string())
+        .map_err(|payload| {
+            format!(
+                "Error inicializando pipeline wgpu 3D ({target_format:?}, max_tex={max_tex}, max_buf={}): {}",
+                limits.max_buffer_size,
+                panic_payload_to_string(payload)
+            )
+        })
     }
 
     fn new(
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         vertices: &[Vertex3D],
         indices: &[u32],
         initial_size: [u32; 2],
@@ -211,12 +219,14 @@ impl Map3dGpuResources {
     ) -> Self {
         let vertex_buffer = create_buffer_with_data(
             device,
+            queue,
             "latam_3d_vb",
             wgpu::BufferUsages::VERTEX,
             bytemuck::cast_slice(vertices),
         );
         let index_buffer = create_buffer_with_data(
             device,
+            queue,
             "latam_3d_ib",
             wgpu::BufferUsages::INDEX,
             bytemuck::cast_slice(indices),
@@ -285,7 +295,7 @@ impl Map3dGpuResources {
                 wgpu::VertexAttribute {
                     offset: 40,
                     shader_location: 3,
-                    format: wgpu::VertexFormat::Sint32x2,
+                    format: wgpu::VertexFormat::Float32x2,
                 },
             ],
         };
@@ -309,7 +319,7 @@ impl Map3dGpuResources {
                 conservative: false,
             },
             depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
+                format: wgpu::TextureFormat::Depth24Plus,
                 depth_write_enabled: true,
                 depth_compare: wgpu::CompareFunction::LessEqual,
                 stencil: wgpu::StencilState::default(),
@@ -320,7 +330,7 @@ impl Map3dGpuResources {
                 module: &shader_3d,
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                    format: wgpu::TextureFormat::Rgba8Unorm,
                     blend: Some(wgpu::BlendState::REPLACE),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
@@ -347,13 +357,14 @@ impl Map3dGpuResources {
         });
 
         let blit_uniform_data = BlitUniforms {
-            encode_srgb: if target_format.is_srgb() { 0.0 } else { 1.0 },
+            decode_srgb: if target_format.is_srgb() { 1.0 } else { 0.0 },
             _pad: [0.0; 3],
         };
         let blit_uniform_buffer = create_buffer_with_data(
             device,
+            queue,
             "latam_blit_uniform",
-            wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            wgpu::BufferUsages::UNIFORM,
             bytemuck::bytes_of(&blit_uniform_data),
         );
 
@@ -445,7 +456,7 @@ impl Map3dGpuResources {
             return Ok(());
         }
         let blit_uniform_data = BlitUniforms {
-            encode_srgb: if new_format.is_srgb() { 0.0 } else { 1.0 },
+            decode_srgb: if new_format.is_srgb() { 1.0 } else { 0.0 },
             _pad: [0.0; 3],
         };
         queue.write_buffer(
@@ -461,7 +472,12 @@ impl Map3dGpuResources {
                 new_format,
             )
         }))
-        .map_err(|_| "No se pudo adaptar blit_pipeline al formato de superficie".to_string())?;
+        .map_err(|payload| {
+            format!(
+                "No se pudo adaptar blit_pipeline a {new_format:?}: {}",
+                panic_payload_to_string(payload)
+            )
+        })?;
         self.blit_pipeline = new_pipeline;
         self.target_format = new_format;
         Ok(())
@@ -477,7 +493,12 @@ impl Map3dGpuResources {
         let targets = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             create_offscreen_targets(device, w, h)
         }))
-        .map_err(|_| "No se pudieron crear texturas offscreen 3D".to_string())?;
+        .map_err(|payload| {
+            format!(
+                "No se pudieron crear texturas offscreen ({w}x{h}): {}",
+                panic_payload_to_string(payload)
+            )
+        })?;
         self.color_texture = targets.0;
         self.color_view = targets.1;
         self.depth_texture = targets.2;
@@ -507,11 +528,18 @@ impl egui_wgpu::CallbackTrait for Map3dPaintCallback {
         let target_w = self.viewport_px[0].clamp(64, max_dim);
         let target_h = self.viewport_px[1].clamp(64, max_dim);
 
+        if self.gpu_3d_error.lock().is_none() {
+            if let Some(Map3dGpuState::Failed(_)) = callback_resources.get::<Map3dGpuState>() {
+                callback_resources.remove::<Map3dGpuState>();
+            }
+        }
+
         let gpu_state = callback_resources
             .entry::<Map3dGpuState>()
             .or_insert_with(|| {
                 match Map3dGpuResources::try_new(
                     device,
+                    queue,
                     &self.vertices,
                     &self.indices,
                     [target_w, target_h],
@@ -519,29 +547,31 @@ impl egui_wgpu::CallbackTrait for Map3dPaintCallback {
                 ) {
                     Ok(res) => Map3dGpuState::Ready(res),
                     Err(err) => {
-                        log::error!("Desactivando mapa 3D por error de GPU: {err}");
-                        self.gpu_3d_failed.store(true, Ordering::Relaxed);
-                        Map3dGpuState::Failed
+                        log::error!("Error inicializando visor 3D wgpu: {err}");
+                        *self.gpu_3d_error.lock() = Some(err.clone());
+                        Map3dGpuState::Failed(err)
                     }
                 }
             });
 
         let Map3dGpuState::Ready(res) = gpu_state else {
-            self.gpu_3d_failed.store(true, Ordering::Relaxed);
+            if let Map3dGpuState::Failed(err) = gpu_state {
+                *self.gpu_3d_error.lock() = Some(err.clone());
+            }
             return Vec::new();
         };
 
         if let Err(err) = res.sync_target_format(device, queue, self.target_format) {
             log::error!("Error sincronizando target_format 3D: {err}");
-            *gpu_state = Map3dGpuState::Failed;
-            self.gpu_3d_failed.store(true, Ordering::Relaxed);
+            *self.gpu_3d_error.lock() = Some(err.clone());
+            *gpu_state = Map3dGpuState::Failed(err);
             return Vec::new();
         }
 
         if let Err(err) = res.ensure_size(device, target_w, target_h) {
             log::error!("Error redimensionando offscreen 3D: {err}");
-            *gpu_state = Map3dGpuState::Failed;
-            self.gpu_3d_failed.store(true, Ordering::Relaxed);
+            *self.gpu_3d_error.lock() = Some(err.clone());
+            *gpu_state = Map3dGpuState::Failed(err);
             return Vec::new();
         }
 
@@ -559,9 +589,9 @@ impl egui_wgpu::CallbackTrait for Map3dPaintCallback {
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.012,
-                            g: 0.032,
-                            b: 0.068,
+                            r: 0.032,
+                            g: 0.088,
+                            b: 0.165,
                             a: 1.0,
                         }),
                         store: wgpu::StoreOp::Store,
@@ -605,6 +635,16 @@ impl egui_wgpu::CallbackTrait for Map3dPaintCallback {
     }
 }
 
+fn panic_payload_to_string(payload: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "Panic interno sin mensaje en wgpu".to_string()
+    }
+}
+
 fn create_blit_pipeline(
     device: &wgpu::Device,
     layout: &wgpu::PipelineLayout,
@@ -640,6 +680,7 @@ fn create_blit_pipeline(
 
 fn create_buffer_with_data(
     device: &wgpu::Device,
+    queue: &wgpu::Queue,
     label: &str,
     usage: wgpu::BufferUsages,
     bytes: &[u8],
@@ -648,14 +689,16 @@ fn create_buffer_with_data(
     let buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some(label),
         size,
-        usage,
-        mapped_at_creation: true,
+        usage: usage | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
     });
-    if !bytes.is_empty() {
-        let mut mapped = buffer.slice(..bytes.len() as u64).get_mapped_range_mut();
-        mapped.copy_from_slice(bytes);
+    const CHUNK_BYTES: usize = 4 * 1024 * 1024;
+    let mut offset = 0usize;
+    while offset < bytes.len() {
+        let end = (offset + CHUNK_BYTES).min(bytes.len());
+        queue.write_buffer(&buffer, offset as u64, &bytes[offset..end]);
+        offset = end;
     }
-    buffer.unmap();
     buffer
 }
 
@@ -679,7 +722,7 @@ fn create_offscreen_targets(
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        format: wgpu::TextureFormat::Rgba8Unorm,
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
         view_formats: &[],
     });
@@ -695,7 +738,7 @@ fn create_offscreen_targets(
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Depth32Float,
+        format: wgpu::TextureFormat::Depth24Plus,
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
         view_formats: &[],
     });
@@ -759,7 +802,7 @@ struct VsIn {
     @location(0) pos: vec3<f32>,
     @location(1) normal: vec3<f32>,
     @location(2) color: vec4<f32>,
-    @location(3) meta: vec2<i32>,
+    @location(3) meta: vec2<f32>,
 };
 
 struct VsOut {
@@ -767,7 +810,7 @@ struct VsOut {
     @location(0) world_pos: vec3<f32>,
     @location(1) world_normal: vec3<f32>,
     @location(2) color: vec4<f32>,
-    @location(3) @interpolate(flat) meta: vec2<i32>,
+    @location(3) meta: vec2<f32>,
 };
 
 @vertex
@@ -784,8 +827,8 @@ fn vs_main(v: VsIn) -> VsOut {
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     var base = in.color.rgb;
-    let c_slot = in.meta.x;
-    let p_slot = in.meta.y;
+    let c_slot = i32(round(in.meta.x));
+    let p_slot = i32(round(in.meta.y));
 
     if (c_slot >= 0 && c_slot < 32) {
         // Modo distinto a Político (1=PIB, 2=Inflación, 3=Diplomacia)
@@ -816,13 +859,14 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let ambient = mix(vec3<f32>(0.20, 0.24, 0.30), vec3<f32>(0.46, 0.50, 0.56), hemi);
 
     let lit = base * (ambient + vec3<f32>(0.86, 0.83, 0.78) * ndl + vec3<f32>(0.40, 0.52, 0.68) * rim);
-    return vec4<f32>(lit, 1.0);
+    let srgb = pow(clamp(lit, vec3<f32>(0.0), vec3<f32>(1.0)), vec3<f32>(1.0 / 2.2));
+    return vec4<f32>(srgb, 1.0);
 }
 "#;
 
 const SHADER_BLIT_WGSL: &str = r#"
 struct BlitUniforms {
-    encode_srgb: f32,
+    decode_srgb: f32,
     _pad0: f32,
     _pad1: f32,
     _pad2: f32,
@@ -850,9 +894,9 @@ fn vs_main(@builtin(vertex_index) vid: u32) -> VsOut {
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     var col = textureSample(tex_color, tex_sampler, in.uv);
-    if (blit_u.encode_srgb > 0.5) {
-        let rgb = pow(max(col.rgb, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.2));
-        return vec4<f32>(rgb, col.a);
+    if (blit_u.decode_srgb > 0.5) {
+        let lin = pow(max(col.rgb, vec3<f32>(0.0)), vec3<f32>(2.2));
+        return vec4<f32>(lin, col.a);
     }
     return col;
 }
